@@ -18,6 +18,8 @@
  *   Broker -> Suscriptor (tras PUB):   NEWS <tema>|<cuerpo>\\n
  *
  * Límites: tamaños acotados para evitar fragmentación excesiva en UDP.
+ *
+ * Cabeceras y macros (stddef, PUBSUB_UDP_*): ver README.md
  */
 #ifndef PUBSUB_UDP_H
 #define PUBSUB_UDP_H

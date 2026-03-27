@@ -15,6 +15,8 @@
  *   ./publisher_udp 127.0.0.1 9000 EquipoA_vs_EquipoB
  *
  * Compilación (Linux): gcc -Wall -Wextra -std=c11 -o publisher_udp publisher_udp.c
+ *
+ * Documentación punto a punto de cabeceras estándar/POSIX y sockets: README.md
  */
 
 #include "pubsub_udp.h"
@@ -53,6 +55,7 @@ static int send_pub(int sock, const struct sockaddr_in *broker, const char *topi
         return -1;
     }
     size_t len = strlen(buf);
+    /* sendto: datagrama completo hacia el broker (sin connect previo). */
     ssize_t n = sendto(sock, buf, len, 0, (const struct sockaddr *)broker,
                        (socklen_t)sizeof(*broker));
     if (n < 0) {
@@ -159,9 +162,10 @@ int main(int argc, char **argv) {
     memset(&broker, 0, sizeof broker);
     broker.sin_family = AF_INET;
     broker.sin_port = htons((uint16_t)port_ul);
+    /* inet_pton: dirección del broker desde línea de comandos → binario IPv4. */
     if (inet_pton(AF_INET, broker_ip, &broker.sin_addr) != 1) {
         fprintf(stderr, "Dirección IPv4 inválida: %s\n", broker_ip);
-        close(sock);
+        close(sock); /* cerrar fd si no hubo dirección válida */
         return EXIT_FAILURE;
     }
 
@@ -183,7 +187,7 @@ int main(int argc, char **argv) {
 
         const char *msg = match_timeline[idx].text;
         if (send_pub(sock, &broker, topic, msg) != 0) {
-            close(sock);
+            close(sock); /* sendto falló; liberar descriptor */
             return EXIT_FAILURE;
         }
     }
@@ -201,6 +205,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    close(sock);
+    close(sock); /* fin normal: cerrar el socket UDP */
     return EXIT_SUCCESS;
 }

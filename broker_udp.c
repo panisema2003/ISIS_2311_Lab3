@@ -15,6 +15,8 @@
  *   - Puede haber pérdida o desorden; este programa no retransmite ni ordena.
  *
  * Compilación (Linux): gcc -Wall -Wextra -std=c11 -o broker_udp broker_udp.c
+ *
+ * Documentación punto a punto de cabeceras estándar/POSIX y sockets: README.md
  */
 
 #include "pubsub_udp.h"
@@ -108,6 +110,7 @@ static int send_datagram(int sock, const char *text, const struct sockaddr_in *t
         fprintf(stderr, "[broker] Mensaje demasiado largo para un datagrama.\n");
         return -1;
     }
+    /* sendto: un datagrama UDP hacia *to (IP:puerto ya en orden de red). */
     ssize_t n = sendto(sock, text, len, 0, (const struct sockaddr *)to,
                        (socklen_t)sizeof(*to));
     if (n < 0) {
@@ -146,6 +149,7 @@ static void handle_subscribe(int sock, char *payload, const struct sockaddr_in *
         return;
     }
     (void)send_datagram(sock, ack, client);
+    /* inet_ntoa / ntohs: solo presentación humana de la dirección guardada. */
     printf("[broker] Suscripción registrada: tema='%s' desde %s:%u (total suscriptores en tema: %d)\n",
            payload, inet_ntoa(client->sin_addr), ntohs(client->sin_port),
            g_topics[ti].n_subs);
@@ -214,6 +218,7 @@ int main(int argc, char **argv) {
         port = (unsigned short)p;
     }
 
+    /* socket: crear extremo UDP IPv4; el SO asigna un puerto local efímero si no bind. */
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket");
@@ -221,6 +226,7 @@ int main(int argc, char **argv) {
     }
 
     int opt = 1;
+    /* setsockopt SO_REUSEADDR: facilita reinicios rápidos del broker en el mismo puerto. */
     if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof opt) < 0) {
         perror("setsockopt SO_REUSEADDR");
         close(sock);
@@ -230,12 +236,14 @@ int main(int argc, char **argv) {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof addr);
     addr.sin_family = AF_INET;
+    /* INADDR_ANY + htonl: escuchar en todas las interfaces IPv4 de la máquina. */
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
 
+    /* bind: el broker queda registrado en <todas las IPs>:puerto para recvfrom entrantes. */
     if (bind(sock, (struct sockaddr *)&addr, sizeof addr) < 0) {
         perror("bind");
-        close(sock);
+        close(sock); /* puerto ocupado u otro error: liberar descriptor */
         return EXIT_FAILURE;
     }
 
@@ -245,6 +253,7 @@ int main(int argc, char **argv) {
         char buf[PUBSUB_UDP_MAX_MSG + 1];
         struct sockaddr_in client;
         socklen_t clen = sizeof client;
+        /* recvfrom: obtiene datagrama + dirección de origen (clave para registrar SUB). */
         ssize_t n = recvfrom(sock, buf, PUBSUB_UDP_MAX_MSG, 0,
                              (struct sockaddr *)&client, &clen);
         if (n < 0) {
@@ -267,7 +276,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* No alcanzable */
+    /* No alcanzable con bucle infinito; close liberaría el fd si hubiera salida. */
     close(sock);
     return EXIT_SUCCESS;
 }

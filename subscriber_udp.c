@@ -11,6 +11,8 @@
  *   ./subscriber_udp 127.0.0.1 9000 EquipoA_vs_EquipoB EquipoC_vs_EquipoD
  *
  * Compilación (Linux): gcc -Wall -Wextra -std=c11 -o subscriber_udp subscriber_udp.c
+ *
+ * Documentación punto a punto de cabeceras estándar/POSIX y sockets: README.md
  */
 
 #include "pubsub_udp.h"
@@ -31,6 +33,7 @@ static int send_sub(int sock, const struct sockaddr_in *broker, const char *topi
         fprintf(stderr, "[subscriber] SUB demasiado largo.\n");
         return -1;
     }
+    /* sendto: registro SUB en el broker; el origen del datagrama identifica al cliente. */
     ssize_t n = sendto(sock, buf, (size_t)w, 0, (const struct sockaddr *)broker,
                        (socklen_t)sizeof(*broker));
     if (n < 0) {
@@ -74,6 +77,7 @@ int main(int argc, char **argv) {
     memset(&broker, 0, sizeof broker);
     broker.sin_family = AF_INET;
     broker.sin_port = htons((uint16_t)port_ul);
+    /* inet_pton: IP del broker (p. ej. otra VM) en formato texto → sin_addr. */
     if (inet_pton(AF_INET, broker_ip, &broker.sin_addr) != 1) {
         fprintf(stderr, "Dirección IPv4 inválida: %s\n", broker_ip);
         close(sock);
@@ -104,6 +108,7 @@ int main(int argc, char **argv) {
         char buf[PUBSUB_UDP_MAX_MSG + 1];
         struct sockaddr_in from;
         socklen_t flen = sizeof from;
+        /* recvfrom: ACK/NEWS del broker (u otro); "from" documenta el remitente. */
         ssize_t n = recvfrom(sock, buf, PUBSUB_UDP_MAX_MSG, 0,
                              (struct sockaddr *)&from, &flen);
         if (n < 0) {
@@ -113,6 +118,7 @@ int main(int argc, char **argv) {
         buf[n] = '\0';
 
         char fromstr[INET_ADDRSTRLEN];
+        /* inet_ntop: copia la IPv4 a fromstr (seguro concurrente vs inet_ntoa). */
         inet_ntop(AF_INET, &from.sin_addr, fromstr, sizeof fromstr);
 
         if (strncmp(buf, PUBSUB_UDP_PREFIX_ACK, strlen(PUBSUB_UDP_PREFIX_ACK)) == 0) {
