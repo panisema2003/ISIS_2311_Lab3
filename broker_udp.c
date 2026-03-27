@@ -71,8 +71,7 @@ static int add_topic_bucket(const char *topic) {
     }
     TopicBucket *b = &g_topics[g_n_topics];
     memset(b, 0, sizeof(*b));
-    strncpy(b->topic, topic, PUBSUB_UDP_MAX_TOPIC_LEN);
-    b->topic[PUBSUB_UDP_MAX_TOPIC_LEN] = '\0';
+    (void)snprintf(b->topic, sizeof b->topic, "%s", topic);
     b->n_subs = 0;
     g_n_topics++;
     return g_n_topics - 1;
@@ -132,6 +131,11 @@ static void handle_subscribe(int sock, char *payload, const struct sockaddr_in *
     /* Un solo token como tema (sin espacios), según especificación del protocolo. */
     if (strchr(payload, ' ') != NULL) {
         fprintf(stderr, "[broker] El tema no debe contener espacios: '%s'\n", payload);
+        return;
+    }
+    if (strlen(payload) > PUBSUB_UDP_MAX_TOPIC_LEN) {
+        fprintf(stderr, "[broker] Tema demasiado largo (máx %d caracteres).\n",
+                PUBSUB_UDP_MAX_TOPIC_LEN);
         return;
     }
 

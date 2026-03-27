@@ -1,7 +1,8 @@
 # Laboratorio 3 compilacion en linux (usaremos la vm del lab2)
 
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -O2
+# -D_DEFAULT_SOURCE: glibc con -std=c11 expone usleep(3) y useconds_t en <unistd.h>
+CFLAGS = -Wall -Wextra -std=c11 -O2 -D_DEFAULT_SOURCE
 
 BINARIES = broker_udp publisher_udp subscriber_udp
 

@@ -10,6 +10,8 @@ En el directorio del proyecto:
 make
 ```
 
+El `Makefile` define `-D_DEFAULT_SOURCE` para **glibc** en Linux: con `-std=c11`, sin eso `usleep` y `useconds_t` no aparecen en `<unistd.h>` y la compilación del publicador falla.
+
 Genera `broker_udp`, `publisher_udp` y `subscriber_udp`. `make clean` elimina los binarios.
 
 ## Uso rápido
