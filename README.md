@@ -90,7 +90,8 @@ El formato de mensajes de aplicación está descrito en el comentario inicial de
 | `pubsub_udp.h` | Macros | Prefijo `PUB` y límites de mensaje/tema. |
 | `<stdio.h>` | `snprintf`, `fprintf`, `printf`, `perror`, `fgets` | Armar datagramas, errores, demo e interactivo por stdin. |
 | `<stdlib.h>` | `strtoul`, `rand`, `srand`, `EXIT_*` | Puerto; flags `-n`/`-f`/`-r`; semilla aleatoria para `-r`; salida de `main`. |
-| `<time.h>` | `time` | Semilla de `srand` junto con PID para modo `-r`. |
+| `<time.h>` | `time`, `localtime_r`, `strftime`, `struct tm` | Semilla de `srand` (`-r`); marca de hora local en el cuerpo de cada `PUB`. |
+| `<sys/time.h>` | `gettimeofday`, `struct timeval` | Milisegundos en la marca de tiempo del cuerpo del `PUB`. |
 | `<string.h>` | `strlen`, `strcmp`, `strchr`, `memcpy`, `memset` | Validación de tema; parseo `_vs_`; limpiar `sockaddr_in`. |
 | `<stdint.h>` | `uint16_t` | Cast del puerto para `htons`. |
 | `<sys/socket.h>` | `socket`, `connect`, `send`, `AF_INET`, `SOCK_DGRAM`, `ssize_t`, `socklen_t` | UDP “conectado” al broker y envío con `send`. |
@@ -103,6 +104,11 @@ El formato de mensajes de aplicación está descrito en el comentario inicial de
 - **`socket`** — UDP; luego **`connect`** al broker y **`send`** para cada `PUB`.
 - **`memset` + `sin_family` + `htons` + `inet_pton`** — Dirección del broker antes de `connect`.
 - **`close`** — Al terminar o ante error.
+
+**Marca de tiempo en el cuerpo del mensaje:**
+
+- **`gettimeofday`** — Instante con resolución de microsegundos en el host publicador.
+- **`localtime_r` + `strftime`** — Conversión a calendario local y cadena legible (`[AAAA-MM-DD hh:mm:ss`…); los ms se añaden con `snprintf` tras `strftime`.
 
 ---
 

@@ -2,7 +2,9 @@
  * publisher_udp.c — Publicador UDP (periodista deportivo simulado).
  *
  * Envía al broker datagramas con el formato PUB <tema>|<cuerpo>, asociados a un
- * partido concreto (tema). Los mensajes demo siguen una línea de tiempo: cada
+ * partido concreto (tema). Cada cuerpo lleva marca de hora local del publicador
+ * al momento del envío (p. ej. [2026-03-27 14:30:01.234] texto...). Los mensajes
+ * demo siguen una línea de tiempo: cada
  * evento tiene una espera distinta antes de enviarse (ritmo irregular, como en
  * un partido real: ratos sin novedad y rachas de jugadas). Por defecto al menos
  * 10 envíos para el laboratorio; tras eso puede escribir líneas por stdin.
@@ -30,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <time.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -122,9 +125,53 @@ static int build_pub_datagram(char *out, size_t out_sz, const char *topic,
     return 0;
 }
 
+/**
+ * Antepone fecha/hora local con milisegundos al cuerpo (reloj del host que publica).
+ */
+static int body_with_timestamp(char *out, size_t out_sz, const char *body) {
+    struct timeval tv;
+    struct tm tm_buf;
+    char ts[48];
+
+    if (gettimeofday(&tv, NULL) != 0) {
+        tv.tv_sec = time(NULL);
+        tv.tv_usec = 0L;
+    }
+    if (localtime_r(&tv.tv_sec, &tm_buf) == NULL) {
+        int w = snprintf(out, out_sz, "%s", body);
+        if (w < 0 || (size_t)w >= out_sz) {
+            fprintf(stderr, "[publisher] Cuerpo demasiado largo.\n");
+            return -1;
+        }
+        return 0;
+    }
+    if (strftime(ts, sizeof ts, "[%Y-%m-%d %H:%M:%S", &tm_buf) == 0) {
+        int w = snprintf(out, out_sz, "%s", body);
+        if (w < 0 || (size_t)w >= out_sz) {
+            fprintf(stderr, "[publisher] Cuerpo demasiado largo.\n");
+            return -1;
+        }
+        return 0;
+    }
+    size_t prefix_len = strlen(ts);
+    (void)snprintf(ts + prefix_len, sizeof ts - prefix_len, ".%03ld] ",
+                   (long)(tv.tv_usec / 1000L));
+
+    int w = snprintf(out, out_sz, "%s%s", ts, body);
+    if (w < 0 || (size_t)w >= out_sz) {
+        fprintf(stderr, "[publisher] Cuerpo con marca de tiempo demasiado largo para un datagrama.\n");
+        return -1;
+    }
+    return 0;
+}
+
 static int send_pub(int sock, int quiet, const char *topic, const char *body) {
+    char stamped[PUBSUB_UDP_MAX_MSG];
+    if (body_with_timestamp(stamped, sizeof stamped, body) != 0) {
+        return -1;
+    }
     char buf[PUBSUB_UDP_MAX_MSG + 1];
-    if (build_pub_datagram(buf, sizeof buf, topic, body) != 0) {
+    if (build_pub_datagram(buf, sizeof buf, topic, stamped) != 0) {
         return -1;
     }
     size_t len = strlen(buf);
