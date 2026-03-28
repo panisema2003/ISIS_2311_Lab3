@@ -11,7 +11,10 @@
  *
  * Notas sobre UDP:
  *   - No hay sesión TCP: cada envío es independiente; el broker identifica a
- *     los suscriptores por la dirección de origen del datagrama SUB.
+ *     los suscriptores por la dirección de origen del datagrama SUB (IP:puerto).
+ *   - No hay cierre de sesión: si el proceso cliente termina, la entrada en el
+ *     broker sigue hasta llenar la tabla; un nuevo cliente suele tener otro
+ *     puerto efímero y se registra como otro extremo (fiel al modelo UDP).
  *   - Puede haber pérdida o desorden; este programa no retransmite ni ordena.
  *
  * Compilación (Linux): gcc -Wall -Wextra -std=c11 -o broker_udp broker_udp.c
@@ -86,7 +89,8 @@ static int ensure_topic_index(const char *topic) {
 }
 
 /**
- * Añade la dirección del suscriptor al tema si aún no estaba (evita duplicados).
+ * Añade el extremo UDP (IP:puerto) de origen del SUB al tema.
+ * Solo evita duplicar el mismo sockaddr exacto; no fusiona por IP (UDP real).
  */
 static void add_subscriber_to_topic(int topic_idx, const struct sockaddr_in *addr) {
     TopicBucket *b = &g_topics[topic_idx];
@@ -96,7 +100,7 @@ static void add_subscriber_to_topic(int topic_idx, const struct sockaddr_in *add
         }
     }
     if (b->n_subs >= PUBSUB_UDP_MAX_SUBS_PER_TOPIC) {
-        fprintf(stderr, "[broker] Aviso: tema '%s' alcanzó el máximo de suscriptores.\n",
+        fprintf(stderr, "[broker] Aviso: tema '%s' alcanzó el máximo de extremos UDP.\n",
                 b->topic);
         return;
     }
@@ -154,7 +158,8 @@ static void handle_subscribe(int sock, char *payload, const struct sockaddr_in *
     }
     (void)send_datagram(sock, ack, client);
     /* inet_ntoa / ntohs: solo presentación humana de la dirección guardada. */
-    printf("[broker] Suscripción registrada: tema='%s' desde %s:%u (total suscriptores en tema: %d)\n",
+    printf("[broker] Suscripción registrada: tema='%s' desde %s:%u "
+           "(extremos IP:puerto en el tema: %d)\n",
            payload, inet_ntoa(client->sin_addr), ntohs(client->sin_port),
            g_topics[ti].n_subs);
 }
@@ -179,7 +184,7 @@ static void handle_publish(int sock, char *payload) {
 
     int ti = find_topic_index(topic);
     if (ti < 0) {
-        printf("[broker] PUB para tema sin suscriptores registrados: '%s' (mensaje descartado para reenvío)\n",
+        printf("[broker] PUB para tema sin extremos registrados: '%s' (mensaje descartado para reenvío)\n",
                topic);
         return;
     }
@@ -198,7 +203,7 @@ static void handle_publish(int sock, char *payload) {
             sent++;
         }
     }
-    printf("[broker] PUB tema='%s' reenviado a %d suscriptor(es).\n", topic, sent);
+    printf("[broker] PUB tema='%s' reenviado a %d extremo(s) UDP.\n", topic, sent);
 }
 
 static void usage(const char *argv0) {
