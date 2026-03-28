@@ -6,8 +6,9 @@
  * reenvía cada noticia solo a quienes se suscribieron a ese tema.
  *
  * Uso:
- *   ./broker_udp [puerto]
+ *   ./broker_udp [-v] [puerto]
  *   Si no se indica puerto, se usa PUBSUB_UDP_DEFAULT_PORT (pubsub_udp.h).
+ *   -v: traza cada datagrama en stderr (depuración).
  *
  * Notas sobre UDP:
  *   - No hay sesión TCP: cada envío es independiente; el broker identifica a
@@ -202,25 +203,33 @@ static void handle_publish(int sock, char *payload) {
 }
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "Uso: %s [puerto]\n", argv0);
+    fprintf(stderr, "Uso: %s [-v] [puerto]\n", argv0);
+    fprintf(stderr, "  -v  registra en stderr cada datagrama recibido (tamaño, IP:puerto).\n");
     fprintf(stderr, "  Escucha datagramas UDP y distribuye mensajes por tema.\n");
 }
 
 int main(int argc, char **argv) {
     unsigned short port = PUBSUB_UDP_DEFAULT_PORT;
-    if (argc > 2) {
-        usage(argv[0]);
-        return EXIT_FAILURE;
-    }
-    if (argc == 2) {
+    int verbose = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-v") == 0) {
+            verbose = 1;
+            continue;
+        }
         char *end = NULL;
-        unsigned long p = strtoul(argv[1], &end, 10);
-        if (end == argv[1] || *end != '\0' || p == 0UL || p > 65535UL) {
-            fprintf(stderr, "Puerto inválido: %s\n", argv[1]);
+        unsigned long p = strtoul(argv[i], &end, 10);
+        if (end == argv[i] || *end != '\0' || p == 0UL || p > 65535UL) {
+            fprintf(stderr, "Argumento inválido: %s\n", argv[i]);
+            usage(argv[0]);
             return EXIT_FAILURE;
         }
         port = (unsigned short)p;
     }
+
+    /* Sin TTY (p. ej. redirecciones), stdout suele ir con buffer completo: forzar línea visible. */
+    (void)setvbuf(stdout, NULL, _IONBF, 0);
+    (void)setvbuf(stderr, NULL, _IONBF, 0);
 
     /* socket: crear extremo UDP IPv4; el SO asigna un puerto local efímero si no bind. */
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -251,7 +260,13 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    fprintf(stderr,
+            "[broker] PID %d enlazado a UDP 0.0.0.0:%u — si hay tráfico en tcpdump pero no "
+            "aparece aquí, ejecute: ss -ulnp | grep %u\n",
+            (int)getpid(), (unsigned)port, (unsigned)port);
+
     printf("[broker] Escuchando UDP en el puerto %u. Ctrl+C para salir.\n", port);
+    fflush(stdout);
 
     for (;;) {
         char buf[PUBSUB_UDP_MAX_MSG + 1];
@@ -269,13 +284,15 @@ int main(int argc, char **argv) {
         }
         buf[n] = '\0';
 
-        if (getenv("UDP_BROKER_TRACE") != NULL && getenv("UDP_BROKER_TRACE")[0] != '\0') {
+        if (verbose || (getenv("UDP_BROKER_TRACE") != NULL &&
+                        getenv("UDP_BROKER_TRACE")[0] != '\0')) {
             char tr_ip[INET_ADDRSTRLEN];
             if (inet_ntop(AF_INET, &client.sin_addr, tr_ip, sizeof tr_ip) == NULL) {
                 snprintf(tr_ip, sizeof tr_ip, "?");
             }
-            fprintf(stderr, "[broker trace] recv %zd bytes de %s:%u (inicio: %.48s)\n", n,
-                    tr_ip, (unsigned)ntohs(client.sin_port), buf);
+            fprintf(stderr, "[broker] recv %zd bytes de %s:%u | %.48s%s\n", n, tr_ip,
+                    (unsigned)ntohs(client.sin_port), buf, n > 48 ? "..." : "");
+            fflush(stderr);
         }
 
         if (strncmp(buf, PUBSUB_UDP_PREFIX_SUB, strlen(PUBSUB_UDP_PREFIX_SUB)) == 0) {

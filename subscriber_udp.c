@@ -97,6 +97,9 @@ static void usage(const char *argv0) {
 }
 
 int main(int argc, char **argv) {
+    (void)setvbuf(stdout, NULL, _IONBF, 0);
+    (void)setvbuf(stderr, NULL, _IONBF, 0);
+
     /* Mínimo: programa ip puerto un_tema  =>  argc == 4 */
     if (argc < 4) {
         usage(argv[0]);

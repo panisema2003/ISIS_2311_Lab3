@@ -159,6 +159,9 @@ static const size_t match_timeline_len = sizeof match_timeline / sizeof match_ti
 static const unsigned k_between_cycle_pause_ms = 2500u;
 
 int main(int argc, char **argv) {
+    (void)setvbuf(stdout, NULL, _IONBF, 0);
+    (void)setvbuf(stderr, NULL, _IONBF, 0);
+
     int auto_count = 12;
     int base_args = 4;
 

@@ -16,7 +16,7 @@ Genera `broker_udp`, `publisher_udp` y `subscriber_udp`. `make clean` elimina lo
 
 ## Uso rápido
 
-- Broker: `./broker_udp [puerto]` (por defecto puerto definido en `pubsub_udp.h`, típicamente 9000).
+- Broker: `./broker_udp [-v] [puerto]` (`-v` = un log en stderr por datagrama; por defecto puerto 9000 en `pubsub_udp.h`).
 - Publicador: `./publisher_udp <ip_broker> <puerto> <tema> [-n N]`
 - Suscriptor: `./subscriber_udp <ip_broker> <puerto> <tema1> [tema2 ...]`
 
@@ -24,7 +24,7 @@ Genera `broker_udp`, `publisher_udp` y `subscriber_udp`. `make clean` elimina lo
 
 Publicador y suscriptor hacen **`connect(UDP)`** al broker y luego **`send()`** / **`recvfrom()`**: así solo intercambian datagramas con ese extremo y el comportamiento es más predecible en red.
 
-**Depuración:** en la VM del broker, `UDP_BROKER_TRACE=1 ./broker_udp` imprime en stderr cada datagrama recibido (tamaño, IP:puerto, inicio del payload). Sirve para comprobar si el tráfico llega al broker.
+**Depuración:** `./broker_udp -v 9000` (o `UDP_BROKER_TRACE=1`) imprime en stderr cada datagrama que **recibe el proceso del broker** (tamaño, IP:puerto, inicio del payload). Al arrancar, el broker muestra su **PID**: debe coincidir con `ss -ulnp | grep 9000`. Si tcpdump ve paquetes pero `-v` no muestra nada, **otro proceso** está recibiendo el puerto 9000 o el broker no es el que cree.
 
 ---
 
