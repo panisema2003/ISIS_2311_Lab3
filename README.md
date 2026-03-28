@@ -20,6 +20,22 @@ Genera `broker_udp`, `publisher_udp` y `subscriber_udp`. `make clean` elimina lo
 - Publicador: `./publisher_udp <ip_broker> <puerto> <tema> [-n N]`
 - Suscriptor: `./subscriber_udp <ip_broker> <puerto> <tema1> [tema2 ...]`
 
+**Tema con dos equipos:** use el patrón `Local_vs_Visitante` (por ejemplo `EquipoC_vs_EquipoD`). El publicador arma los textos de la demo con esos nombres. Si no hay `_vs_`, el tema completo se trata como equipo local y se usa `Rival` como visita en la narración.
+
+Publicador y suscriptor hacen **`connect(UDP)`** al broker y luego **`send()`** / **`recvfrom()`**: así solo intercambian datagramas con ese extremo y el comportamiento es más predecible en red.
+
+**Depuración:** en la VM del broker, `UDP_BROKER_TRACE=1 ./broker_udp` imprime en stderr cada datagrama recibido (tamaño, IP:puerto, inicio del payload). Sirve para comprobar si el tráfico llega al broker.
+
+---
+
+## Si “envía” pero el broker no reacciona
+
+1. **IP del broker:** desde la VM de clientes **no** uses `127.0.0.1` si el broker está en **otra** máquina; `127.0.0.1` es siempre la propia VM. Usa la IPv4 del broker (`hostname -I` en la VM del broker, interfaz compartida con los clientes).
+2. **Firewall en la VM del broker** (Ubuntu): `sudo ufw allow 9000/udp` y `sudo ufw status` (o desactivar ufw en el lab).
+3. **Red virtual:** con **NAT** a veces dos VMs no reciben UDP entrante entre sí. Prefiere **adaptador solo-anfitrión** o **puente** según el manual del laboratorio.
+4. **Mismo puerto** en broker, publicador y suscriptores.
+5. **Suscriptor antes o temprano:** si publicas un tema sin ningún `SUB` previo, el broker descarta el reenvío (ver mensaje en consola del broker).
+
 ---
 
 ## Documentación de cabeceras y funciones (requisito del laboratorio)
@@ -47,11 +63,11 @@ El formato de mensajes de aplicación está descrito en el comentario inicial de
 |----------|----------------------|----------------------|
 | `pubsub_udp.h` | Macros anteriores | Protocolo y límites de buffers/tablas. |
 | `<stdio.h>` | `printf`, `fprintf`, `snprintf`, `perror` | Salida informativa, errores, armado de `ACK`/`NEWS` en buffer acotado; `perror` tras fallos de socket. |
-| `<stdlib.h>` | `strtoul`, `EXIT_SUCCESS`, `EXIT_FAILURE` | Parseo del puerto desde `argv`; códigos de salida de `main`. |
-| `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strchr`, `strncpy`, `memset` | Prefijos `SUB`/`PUB`, búsqueda de tema, copia acotada de nombre de tema, limpieza de estructuras. |
+| `<stdlib.h>` | `strtoul`, `getenv`, `EXIT_SUCCESS`, `EXIT_FAILURE` | Puerto desde `argv`; traza opcional `UDP_BROKER_TRACE`; salida de `main`. |
+| `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strchr`, `memset` | Prefijos `SUB`/`PUB`, búsqueda de tema, limpieza de estructuras. |
 | `<sys/socket.h>` | `socket`, `bind`, `sendto`, `recvfrom`, `setsockopt`, `AF_INET`, `SOCK_DGRAM`, `SOL_SOCKET`, `SO_REUSEADDR`, `ssize_t`, `socklen_t` | Ciclo de vida del socket UDP del broker. |
 | `<netinet/in.h>` | `struct sockaddr_in`, `htons`, `htonl`, `INADDR_ANY` | Dirección de escucha; orden de red. |
-| `<arpa/inet.h>` | `inet_ntoa` | Imprimir IP del cliente en logs (buffer estático interno de la función). |
+| `<arpa/inet.h>` | `inet_ntoa`, `inet_ntop` | IP del cliente en logs (`inet_ntop` en modo traza). |
 | `<unistd.h>` | `close` | Cerrar el descriptor del socket en errores o salida teórica. |
 
 **Sockets (detalle):**
@@ -74,18 +90,17 @@ El formato de mensajes de aplicación está descrito en el comentario inicial de
 | `pubsub_udp.h` | Macros | Prefijo `PUB` y límites de mensaje/tema. |
 | `<stdio.h>` | `snprintf`, `fprintf`, `printf`, `perror`, `fgets` | Armar datagramas, errores, demo e interactivo por stdin. |
 | `<stdlib.h>` | `strtoul`, `EXIT_*` | Puerto, opción `-n`, salida de `main`. |
-| `<string.h>` | `strlen`, `strcmp`, `strchr`, `memset` | Validación de tema y argv; limpiar `sockaddr_in`. |
+| `<string.h>` | `strlen`, `strcmp`, `strchr`, `memcpy`, `memset` | Validación de tema; parseo `_vs_`; limpiar `sockaddr_in`. |
 | `<stdint.h>` | `uint16_t` | Cast del puerto para `htons`. |
-| `<sys/socket.h>` | `socket`, `sendto`, `AF_INET`, `SOCK_DGRAM`, `ssize_t`, `socklen_t` | Envío UDP al broker. |
+| `<sys/socket.h>` | `socket`, `connect`, `send`, `AF_INET`, `SOCK_DGRAM`, `ssize_t`, `socklen_t` | UDP “conectado” al broker y envío con `send`. |
 | `<netinet/in.h>` | `struct sockaddr_in`, `htons` | Dirección del broker. |
 | `<arpa/inet.h>` | `inet_pton` | Cadena IPv4 (`argv`) → `sin_addr` binaria. |
 | `<unistd.h>` | `close`, `usleep`, `useconds_t` | Cerrar socket; pausas entre eventos de la demo (microsegundos). |
 
 **Sockets (detalle):**
 
-- **`socket`** — UDP sin `connect`; cada envío va con **`sendto`** explícito al broker.
-- **`memset` + `sin_family` + `htons` + `inet_pton`** — Inicialización de `sockaddr_in` del broker.
-- **`sendto`** — Datagrama `PUB tema|cuerpo\n`; errores con `errno` / `perror`.
+- **`socket`** — UDP; luego **`connect`** al broker y **`send`** para cada `PUB`.
+- **`memset` + `sin_family` + `htons` + `inet_pton`** — Dirección del broker antes de `connect`.
 - **`close`** — Al terminar o ante error.
 
 ---
@@ -97,17 +112,17 @@ El formato de mensajes de aplicación está descrito en el comentario inicial de
 | `pubsub_udp.h` | Macros | `SUB`, `ACK`, `NEWS` y límites. |
 | `<stdio.h>` | `snprintf`, `fprintf`, `printf`, `perror` | `SUB` en buffer, errores, impresión de noticias. |
 | `<stdlib.h>` | `strtoul`, `EXIT_*` | Puerto desde `argv`. |
-| `<string.h>` | `strchr`, `strlen`, `strncmp`, `memset` | Validación de tema; detectar prefijos en datagramas recibidos. |
+| `<string.h>` | `strchr`, `strlen`, `strncmp`, `memcpy`, `strcspn`, `memset` | Validación de tema; prefijos; parseo de `NEWS`; limpieza de `sockaddr_in`. |
 | `<stdint.h>` | `uint16_t` | Cast para `htons`. |
-| `<sys/socket.h>` | `socket`, `sendto`, `recvfrom`, `AF_INET`, `SOCK_DGRAM`, `ssize_t`, `socklen_t` | Registro y recepción de datagramas. |
+| `<sys/socket.h>` | `socket`, `connect`, `send`, `recvfrom`, `AF_INET`, `SOCK_DGRAM`, `ssize_t`, `socklen_t` | `connect` al broker; `send` de cada `SUB`; recepción de `ACK`/`NEWS`. |
 | `<netinet/in.h>` | `struct sockaddr_in`, `htons`, `ntohs`, `INET_ADDRSTRLEN` | Broker y presentación del puerto de origen. |
-| `<arpa/inet.h>` | `inet_pton`, `inet_ntop` | Broker en binario; IP de origen en cadena (seguro frente a `inet_ntoa` en hilos). |
+| `<arpa/inet.h>` | `inet_pton`, `inet_ntop` | Broker en binario; IP de origen en cadena. |
 | `<unistd.h>` | `close` | Cierre en errores o ruta final teórica de `main`. |
 
 **Sockets (detalle):**
 
-- **`sendto`** — Cada `SUB tema\n` al broker; el origen del datagrama identifica al cliente para el broker.
-- **`recvfrom`** — Recibe `ACK`, `NEWS` u otros; rellena `from` con el remitente.
+- **`connect`** — Asocia el socket UDP al broker; **`send`** envía cada `SUB`.
+- **`recvfrom`** — Recibe `ACK`, `NEWS`; con socket conectado, en la práctica el remitente es el broker.
 - **`inet_ntop`** — Muestra la IPv4 del remitente en el log.
 - **`ntohs`** — Puerto de origen legible.
 

@@ -269,6 +269,15 @@ int main(int argc, char **argv) {
         }
         buf[n] = '\0';
 
+        if (getenv("UDP_BROKER_TRACE") != NULL && getenv("UDP_BROKER_TRACE")[0] != '\0') {
+            char tr_ip[INET_ADDRSTRLEN];
+            if (inet_ntop(AF_INET, &client.sin_addr, tr_ip, sizeof tr_ip) == NULL) {
+                snprintf(tr_ip, sizeof tr_ip, "?");
+            }
+            fprintf(stderr, "[broker trace] recv %zd bytes de %s:%u (inicio: %.48s)\n", n,
+                    tr_ip, (unsigned)ntohs(client.sin_port), buf);
+        }
+
         if (strncmp(buf, PUBSUB_UDP_PREFIX_SUB, strlen(PUBSUB_UDP_PREFIX_SUB)) == 0) {
             handle_subscribe(sock, buf + strlen(PUBSUB_UDP_PREFIX_SUB), &client);
         } else if (strncmp(buf, PUBSUB_UDP_PREFIX_PUB, strlen(PUBSUB_UDP_PREFIX_PUB)) ==

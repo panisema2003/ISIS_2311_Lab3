@@ -38,6 +38,76 @@ static void strip_trailing_crlf(char *s) {
     }
 }
 
+/**
+ * Interpreta tema tipo "EquipoC_vs_EquipoD": equipos local y visita (slugs sin espacios).
+ * Si no hay "_vs_", usa el tema completo como local y "Rival" como visita.
+ */
+static void topic_to_teams(const char *topic, char *home, size_t home_sz, char *away,
+                           size_t away_sz) {
+    const char *sep = strstr(topic, "_vs_");
+    if (sep == NULL || sep == topic) {
+        snprintf(home, home_sz, "%s", topic);
+        snprintf(away, away_sz, "Rival");
+        return;
+    }
+    size_t hlen = (size_t)(sep - topic);
+    if (hlen >= home_sz) {
+        hlen = home_sz - 1U;
+    }
+    memcpy(home, topic, hlen);
+    home[hlen] = '\0';
+    snprintf(away, away_sz, "%s", sep + 4);
+    if (away[0] == '\0') {
+        snprintf(away, away_sz, "Rival");
+    }
+}
+
+/** Construye la línea de narración del índice idx según los equipos del tema. */
+static int build_timeline_message(char *out, size_t out_sz, size_t idx, const char *home,
+                                  const char *away) {
+    switch (idx) {
+    case 0:
+        return snprintf(out, out_sz,
+                        "Inicia el partido: %s contra %s. Saque inicial para %s.", home,
+                        away, home);
+    case 1:
+        return snprintf(out, out_sz, "Minuto 5: primera llegada clara, disparo desviado.");
+    case 2:
+        return snprintf(out, out_sz, "Minuto 12: tarjeta amarilla al #8 de %s.", away);
+    case 3:
+        return snprintf(out, out_sz, "Minuto 18: GOL de %s — asistencia del #10.", home);
+    case 4:
+        return snprintf(out, out_sz, "Minuto 24: Cambio: entra #14, sale #7 (%s).", away);
+    case 5:
+        return snprintf(out, out_sz,
+                        "Minuto 31: GOL de %s de cabeza tras tiro de esquina.", away);
+    case 6:
+        return snprintf(out, out_sz, "Minuto 38: Tarjeta amarilla al #10 de %s.", home);
+    case 7:
+        return snprintf(out, out_sz,
+                        "Minuto 45+1: Fin del primer tiempo. Marcador 1-1 (%s - %s).", home,
+                        away);
+    case 8:
+        return snprintf(out, out_sz, "Inicia el segundo tiempo.");
+    case 9:
+        return snprintf(out, out_sz,
+                        "Minuto 58: GOL de %s al contraataque (marcador 2-1).", home);
+    case 10:
+        return snprintf(out, out_sz, "Minuto 67: Cambio doble en %s.", away);
+    case 11:
+        return snprintf(out, out_sz, "Minuto 74: Tarjeta roja directa al #4 de %s.", away);
+    case 12:
+        return snprintf(out, out_sz, "Minuto 81: GOL de %s de penal — marcador 3-1.", home);
+    case 13:
+        return snprintf(out, out_sz, "Minuto 90: El árbitro añade 4 minutos.");
+    case 14:
+        return snprintf(out, out_sz, "Final del partido: victoria de %s 3-1 sobre %s.", home,
+                        away);
+    default:
+        return snprintf(out, out_sz, "Actualización en vivo (%s vs %s).", home, away);
+    }
+}
+
 static int build_pub_datagram(char *out, size_t out_sz, const char *topic,
                               const char *body) {
     int w = snprintf(out, out_sz, "%s%s|%s\n", PUBSUB_UDP_PREFIX_PUB, topic, body);
@@ -48,21 +118,20 @@ static int build_pub_datagram(char *out, size_t out_sz, const char *topic,
     return 0;
 }
 
-static int send_pub(int sock, const struct sockaddr_in *broker, const char *topic,
-                    const char *body) {
+static int send_pub(int sock, const char *topic, const char *body) {
     char buf[PUBSUB_UDP_MAX_MSG + 1];
     if (build_pub_datagram(buf, sizeof buf, topic, body) != 0) {
         return -1;
     }
     size_t len = strlen(buf);
-    /* sendto: datagrama completo hacia el broker (sin connect previo). */
-    ssize_t n = sendto(sock, buf, len, 0, (const struct sockaddr *)broker,
-                       (socklen_t)sizeof(*broker));
+    /* Tras connect(UDP) al broker, send() entrega el datagrama al mismo destino. */
+    ssize_t n = send(sock, buf, len, 0);
     if (n < 0) {
-        perror("[publisher] sendto");
+        perror("[publisher] send");
         return -1;
     }
     printf("[publisher] Enviado (%zu bytes): %s", len, buf);
+    fflush(stdout);
     return 0;
 }
 
@@ -74,32 +143,14 @@ static void usage(const char *argv0) {
             argv0);
 }
 
-/**
- * Un evento de la transmisión: texto que se publica y milisegundos a esperar
- * antes de enviarlo (desde el envío anterior). El primero suele llevar 0.
- * Los intervalos son irregulares a propósito (silencios largos, rachas cortas).
- */
+/** Solo retrasos entre eventos (el texto depende del tema vía build_timeline_message). */
 typedef struct {
-    const char *text;
     unsigned delay_before_send_ms;
 } MatchEvent;
 
 static const MatchEvent match_timeline[] = {
-    {"Inicia el partido, saque inicial Equipo A.", 0},
-    {"Minuto 5: primera llegada clara, disparo desviado.", 1150},
-    {"Minuto 12: tarjeta amarilla al #8 de Equipo B.", 3100},
-    {"Minuto 18: GOL de Equipo A — asistencia del #10.", 850},
-    {"Minuto 24: Cambio: entra #14, sale #7 (Equipo B).", 1950},
-    {"Minuto 31: GOL de Equipo B de cabeza tras tiro de esquina.", 1050},
-    {"Minuto 38: Tarjeta amarilla al #10 de Equipo A.", 920},
-    {"Minuto 45+1: Fin del primer tiempo. Marcador 1-1.", 1550},
-    {"Inicia el segundo tiempo.", 2800},
-    {"Minuto 58: GOL de Equipo A al contraataque (marcador 2-1).", 480},
-    {"Minuto 67: Cambio doble en Equipo B.", 2250},
-    {"Minuto 74: Tarjeta roja directa al #4 de Equipo B.", 780},
-    {"Minuto 81: GOL de Equipo A de penal — marcador 3-1.", 1680},
-    {"Minuto 90: El árbitro añade 4 minutos.", 1320},
-    {"Final del partido: victoria Equipo A 3-1.", 1100},
+    {0},    {1150}, {3100}, {850}, {1950}, {1050}, {920}, {1550}, {2800}, {480},
+    {2250}, {780},  {1680}, {1320}, {1100},
 };
 
 static const size_t match_timeline_len = sizeof match_timeline / sizeof match_timeline[0];
@@ -134,6 +185,12 @@ int main(int argc, char **argv) {
     }
 
     const char *broker_ip = argv[1];
+    if (strcmp(broker_ip, "127.0.0.1") == 0 || strcmp(broker_ip, "localhost") == 0) {
+        fprintf(stderr,
+                "[publisher] AVISO: 127.0.0.1/localhost es ESTA máquina. Si el broker está en "
+                "OTRA VM, use su IPv4 (p. ej. salida de `hostname -I` en la VM del broker). "
+                "Si no, los datagramas no llegarán al broker.\n");
+    }
     char *port_end = NULL;
     unsigned long port_ul = strtoul(argv[2], &port_end, 10);
     if (port_end == argv[2] || *port_end != '\0' || port_ul == 0UL ||
@@ -169,6 +226,15 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    if (connect(sock, (const struct sockaddr *)&broker, sizeof broker) < 0) {
+        perror("[publisher] connect UDP al broker");
+        close(sock);
+        return EXIT_FAILURE;
+    }
+
+    char home[64], away[64];
+    topic_to_teams(topic, home, sizeof home, away, sizeof away);
+
     printf("[publisher] Broker %s:%lu, tema '%s'. Simulación: %d evento(s) "
            "(intervalos variables, estilo transmisión en vivo).\n",
            broker_ip, port_ul, topic, auto_count);
@@ -185,8 +251,14 @@ int main(int argc, char **argv) {
         }
         usleep((useconds_t)(wait_ms * 1000u));
 
-        const char *msg = match_timeline[idx].text;
-        if (send_pub(sock, &broker, topic, msg) != 0) {
+        char msgbuf[512];
+        int mw = build_timeline_message(msgbuf, sizeof msgbuf, idx, home, away);
+        if (mw < 0 || (size_t)mw >= sizeof msgbuf) {
+            fprintf(stderr, "[publisher] Evento de línea de tiempo demasiado largo.\n");
+            close(sock);
+            return EXIT_FAILURE;
+        }
+        if (send_pub(sock, topic, msgbuf) != 0) {
             close(sock); /* sendto falló; liberar descriptor */
             return EXIT_FAILURE;
         }
@@ -200,7 +272,7 @@ int main(int argc, char **argv) {
         if (line[0] == '\0') {
             continue;
         }
-        if (send_pub(sock, &broker, topic, line) != 0) {
+        if (send_pub(sock, topic, line) != 0) {
             break;
         }
     }

@@ -26,22 +26,67 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-static int send_sub(int sock, const struct sockaddr_in *broker, const char *topic) {
+static int send_sub(int sock, const char *topic) {
     char buf[PUBSUB_UDP_MAX_MSG + 1];
     int w = snprintf(buf, sizeof buf, "%s%s\n", PUBSUB_UDP_PREFIX_SUB, topic);
     if (w < 0 || (size_t)w >= sizeof buf) {
         fprintf(stderr, "[subscriber] SUB demasiado largo.\n");
         return -1;
     }
-    /* sendto: registro SUB en el broker; el origen del datagrama identifica al cliente. */
-    ssize_t n = sendto(sock, buf, (size_t)w, 0, (const struct sockaddr *)broker,
-                       (socklen_t)sizeof(*broker));
+    /* Tras connect(UDP) al broker, send() basta; el origen sigue identificando al cliente. */
+    ssize_t n = send(sock, buf, (size_t)w, 0);
     if (n < 0) {
-        perror("[subscriber] sendto SUB");
+        perror("[subscriber] send SUB");
         return -1;
     }
-    printf("[subscriber] Registrado SUB '%s' (%zd bytes enviados)\n", topic, n);
+    printf("[subscriber] Registrado SUB '%s' (%zd bytes enviados al broker)\n", topic, n);
+    fflush(stdout);
     return 0;
+}
+
+/** Imprime ACK SUB <tema> de forma legible. */
+static void print_ack_line(const char *buf, const char *fromstr, uint16_t port) {
+    const size_t plen = strlen(PUBSUB_UDP_PREFIX_ACK);
+    if (strncmp(buf, PUBSUB_UDP_PREFIX_ACK, plen) != 0) {
+        return;
+    }
+    const char *rest = buf + plen;
+    size_t k = strcspn(rest, "\r\n");
+    printf("\n[subscriber] Suscripcion OK desde %s:%u -> partido \"%.*s\"\n", fromstr,
+           (unsigned)port, (int)k, rest);
+    fflush(stdout);
+}
+
+/** Parsea NEWS <tema>|<cuerpo> y lo muestra separando metadatos del texto. */
+static void print_news_line(const char *buf, const char *fromstr, uint16_t port) {
+    const size_t plen = strlen(PUBSUB_UDP_PREFIX_NEWS);
+    if (strncmp(buf, PUBSUB_UDP_PREFIX_NEWS, plen) != 0) {
+        return;
+    }
+    const char *p = buf + plen;
+    const char *pipe = strchr(p, '|');
+    if (pipe == NULL) {
+        printf("\n[subscriber] [%s:%u] %s", fromstr, (unsigned)port, buf);
+        fflush(stdout);
+        return;
+    }
+    size_t tlen = (size_t)(pipe - p);
+    char topic_disp[64];
+    if (tlen >= sizeof topic_disp) {
+        tlen = sizeof topic_disp - 1U;
+    }
+    memcpy(topic_disp, p, tlen);
+    topic_disp[tlen] = '\0';
+    const char *body = pipe + 1;
+    printf("\n---------- NOTICIA EN VIVO ----------\n");
+    printf("  Partido: %s\n", topic_disp);
+    printf("  Origen:  %s:%u\n", fromstr, (unsigned)port);
+    printf("  Texto:   %s", body);
+    if (body[0] != '\0' && strchr(body, '\n') == NULL) {
+        printf("\n");
+    }
+    printf("---------------------------------------\n");
+    fflush(stdout);
 }
 
 static void usage(const char *argv0) {
@@ -59,6 +104,11 @@ int main(int argc, char **argv) {
     }
 
     const char *broker_ip = argv[1];
+    if (strcmp(broker_ip, "127.0.0.1") == 0 || strcmp(broker_ip, "localhost") == 0) {
+        fprintf(stderr,
+                "[subscriber] AVISO: 127.0.0.1 es ESTA máquina. Si el broker corre en otra "
+                "VM, indique la IPv4 de esa VM (`hostname -I` allí).\n");
+    }
     char *port_end = NULL;
     unsigned long port_ul = strtoul(argv[2], &port_end, 10);
     if (port_end == argv[2] || *port_end != '\0' || port_ul == 0UL ||
@@ -84,6 +134,12 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    if (connect(sock, (const struct sockaddr *)&broker, sizeof broker) < 0) {
+        perror("[subscriber] connect UDP al broker");
+        close(sock);
+        return EXIT_FAILURE;
+    }
+
     for (int i = 3; i < argc; i++) {
         const char *topic = argv[i];
         if (strchr(topic, ' ') != NULL) {
@@ -96,13 +152,14 @@ int main(int argc, char **argv) {
             close(sock);
             return EXIT_FAILURE;
         }
-        if (send_sub(sock, &broker, topic) != 0) {
+        if (send_sub(sock, topic) != 0) {
             close(sock);
             return EXIT_FAILURE;
         }
     }
 
-    printf("[subscriber] Esperando noticias (Ctrl+C para salir)...\n");
+    printf("[subscriber] Suscripciones enviadas. Esperando noticias (Ctrl+C)…\n");
+    fflush(stdout);
 
     for (;;) {
         char buf[PUBSUB_UDP_MAX_MSG + 1];
@@ -121,14 +178,16 @@ int main(int argc, char **argv) {
         /* inet_ntop: copia la IPv4 a fromstr (seguro concurrente vs inet_ntoa). */
         inet_ntop(AF_INET, &from.sin_addr, fromstr, sizeof fromstr);
 
+        uint16_t sport = ntohs(from.sin_port);
         if (strncmp(buf, PUBSUB_UDP_PREFIX_ACK, strlen(PUBSUB_UDP_PREFIX_ACK)) == 0) {
-            printf("[subscriber] Confirmación broker: %s", buf);
+            print_ack_line(buf, fromstr, sport);
         } else if (strncmp(buf, PUBSUB_UDP_PREFIX_NEWS,
                            strlen(PUBSUB_UDP_PREFIX_NEWS)) == 0) {
-            printf("[subscriber] [%s:%u] %s", fromstr, ntohs(from.sin_port), buf);
+            print_news_line(buf, fromstr, sport);
         } else {
-            printf("[subscriber] [%s:%u] (datagrama) %s", fromstr, ntohs(from.sin_port),
-                   buf);
+            printf("\n[subscriber] [%s:%u] (datagrama no estándar) %s", fromstr,
+                   (unsigned)sport, buf);
+            fflush(stdout);
         }
     }
 
