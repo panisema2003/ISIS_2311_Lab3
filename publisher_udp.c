@@ -10,11 +10,12 @@
  * 10 envíos para el laboratorio; tras eso puede escribir líneas por stdin.
  *
  * Uso:
- *   ./publisher_udp <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r] [-q]
+ *   ./publisher_udp <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r] [-q] [-d]
  *     -n N   eventos demo (por defecto 12; máx. 100000).
  *     -f     sin pausas entre envíos (ráfaga).
  *     -r     ~50% de pausas en 0 ms (mezcla ráfagas y tiempos de la línea).
  *     -q     no imprime cada envío (útil con -n grande por SSH: evita inundar TCP/22).
+ *     -d     demo determinista: mismo payload por índice (prefijo [#i/n]) y con -r usa srand(1).
  *
  * Ejemplo:
  *   ./publisher_udp 127.0.0.1 9000 EquipoA_vs_EquipoB
@@ -165,9 +166,27 @@ static int body_with_timestamp(char *out, size_t out_sz, const char *body) {
     return 0;
 }
 
-static int send_pub(int sock, int quiet, const char *topic, const char *body) {
+/**
+ * Si deterministic && n_demo > 0: prefijo [#i/n] fijo (pruebas repetibles).
+ * Si no: marca de hora real. Tras la demo, n_demo==0 → siempre hora real (stdin).
+ */
+static int apply_body_stamp(char *out, size_t out_sz, const char *body, int deterministic,
+                            int seq0, int n_demo) {
+    if (deterministic && n_demo > 0) {
+        int w = snprintf(out, out_sz, "[#%d/%d] %s", seq0 + 1, n_demo, body);
+        if (w < 0 || (size_t)w >= out_sz) {
+            fprintf(stderr, "[publisher] Cuerpo con prefijo [#i/n] demasiado largo.\n");
+            return -1;
+        }
+        return 0;
+    }
+    return body_with_timestamp(out, out_sz, body);
+}
+
+static int send_pub(int sock, int quiet, const char *topic, const char *body, int deterministic,
+                    int seq0, int n_demo) {
     char stamped[PUBSUB_UDP_MAX_MSG];
-    if (body_with_timestamp(stamped, sizeof stamped, body) != 0) {
+    if (apply_body_stamp(stamped, sizeof stamped, body, deterministic, seq0, n_demo) != 0) {
         return -1;
     }
     char buf[PUBSUB_UDP_MAX_MSG + 1];
@@ -190,12 +209,13 @@ static int send_pub(int sock, int quiet, const char *topic, const char *body) {
 
 static void usage(const char *argv0) {
     fprintf(stderr,
-            "Uso: %s <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r] [-q]\n"
+            "Uso: %s <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r] [-q] [-d]\n"
             "  <tema>   partido sin espacios (ej. EquipoA_vs_EquipoB)\n"
             "  -n N     eventos demo (defecto 12, máx 100000)\n"
             "  -f       sin pausas entre envíos (ráfaga)\n"
             "  -r       ~50%% de pausas en 0 ms, resto según línea de tiempo\n"
-            "  -q       sin imprimir cada envío (recomendado con -n alto vía SSH)\n",
+            "  -q       sin imprimir cada envío (recomendado con -n alto vía SSH)\n"
+            "  -d       demo determinista [#i/n] y srand fijo con -r (comparar capturas)\n",
             argv0);
 }
 
@@ -222,6 +242,7 @@ int main(int argc, char **argv) {
     int fast_burst = 0;
     int random_skip_sleep = 0;
     int quiet = 0;
+    int deterministic = 0;
     int base_args = 4;
 
     if (argc < base_args) {
@@ -245,6 +266,8 @@ int main(int argc, char **argv) {
             random_skip_sleep = 1;
         } else if (strcmp(argv[i], "-q") == 0) {
             quiet = 1;
+        } else if (strcmp(argv[i], "-d") == 0) {
+            deterministic = 1;
         } else {
             fprintf(stderr, "Argumento desconocido: %s\n", argv[i]);
             usage(argv[0]);
@@ -253,7 +276,11 @@ int main(int argc, char **argv) {
     }
 
     if (random_skip_sleep) {
-        srand((unsigned)(time(NULL) ^ (unsigned)getpid()));
+        if (deterministic) {
+            srand(1U);
+        } else {
+            srand((unsigned)(time(NULL) ^ (unsigned)getpid()));
+        }
     }
 
     const char *broker_ip = argv[1];
@@ -310,6 +337,11 @@ int main(int argc, char **argv) {
     } else {
         printf(" (intervalos de la línea de tiempo).\n");
     }
+    if (deterministic) {
+        printf("[publisher] Modo -d: payloads de la demo repetibles [#i/%d]; tras la demo, stdin "
+               "sigue con hora real.\n",
+               auto_count);
+    }
 
     for (int i = 0; i < auto_count; i++) {
         size_t idx = (size_t)i % match_timeline_len;
@@ -337,7 +369,7 @@ int main(int argc, char **argv) {
             close(sock);
             return EXIT_FAILURE;
         }
-        if (send_pub(sock, quiet, topic, msgbuf) != 0) {
+        if (send_pub(sock, quiet, topic, msgbuf, deterministic, i, auto_count) != 0) {
             close(sock);
             return EXIT_FAILURE;
         }
@@ -355,7 +387,7 @@ int main(int argc, char **argv) {
         if (line[0] == '\0') {
             continue;
         }
-        if (send_pub(sock, quiet, topic, line) != 0) {
+        if (send_pub(sock, quiet, topic, line, deterministic, 0, 0) != 0) {
             break;
         }
     }

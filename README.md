@@ -17,7 +17,7 @@ Genera `broker_udp`, `publisher_udp` y `subscriber_udp`. `make clean` elimina lo
 ## Uso rápido
 
 - Broker: `./broker_udp [puerto]` (por defecto puerto 9000 en `pubsub_udp.h`).
-- Publicador: `./publisher_udp <ip_broker> <puerto> <tema> [-n N] [-f] [-r] [-q]` — `-n` hasta 100000; **`-f`** = sin `usleep` entre envíos (ráfaga); **`-r`** ≈ mitad de pausas en 0 ms (más irregular); **`-q`** = no imprime cada envío (evita saturar SSH/TCP al medir o capturar tráfico).
+- Publicador: `./publisher_udp <ip_broker> <puerto> <tema> [-n N] [-f] [-r] [-q] [-d]` — `-n` hasta 100000; **`-f`** = sin `usleep` entre envíos (ráfaga); **`-r`** ≈ mitad de pausas en 0 ms (más irregular); **`-q`** = no imprime cada envío (evita saturar SSH/TCP al medir o capturar tráfico); **`-d`** = demo con payloads repetibles `[#i/n]` y `srand(1)` con `-r` para comparar capturas entre corridas.
 - Suscriptor: `./subscriber_udp <ip_broker> <puerto> <tema1> [tema2 ...]`
 
 **Tema con dos equipos:** use el patrón `Local_vs_Visitante` (por ejemplo `EquipoC_vs_EquipoD`). El publicador arma los textos de la demo con esos nombres. Si no hay `_vs_`, el tema completo se trata como equipo local y se usa `Rival` como visita en la narración.
