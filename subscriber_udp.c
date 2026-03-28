@@ -13,6 +13,12 @@
  * Compilación (Linux): gcc -Wall -Wextra -std=c11 -o subscriber_udp subscriber_udp.c
  *
  * Documentación punto a punto de cabeceras estándar/POSIX y sockets: README.md
+ *
+ * Nota: no se usa connect(UDP) al broker. En Linux, un socket UDP conectado solo
+ * entrega datagramas cuyo origen coincide exactamente con el par; si el broker
+ * responde con otra IP de origen (multi-interfaz / elección de ruta), ACK y NEWS
+ * se descartan en el kernel y recvfrom puede bloquearse sin error visible.
+ * Se usa sendto hacia el broker y recvfrom filtrando por IP:puerto del broker.
  */
 
 #include "pubsub_udp.h"
@@ -26,17 +32,23 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-static int send_sub(int sock, const char *topic) {
+/** Mismo extremo UDP (IPv4 + puerto), para aceptar solo datagramas del broker. */
+static int udp_peer_match(const struct sockaddr_in *a, const struct sockaddr_in *b) {
+    return a->sin_family == AF_INET && b->sin_family == AF_INET &&
+           a->sin_addr.s_addr == b->sin_addr.s_addr && a->sin_port == b->sin_port;
+}
+
+static int send_sub(int sock, const struct sockaddr_in *broker, const char *topic) {
     char buf[PUBSUB_UDP_MAX_MSG + 1];
     int w = snprintf(buf, sizeof buf, "%s%s\n", PUBSUB_UDP_PREFIX_SUB, topic);
     if (w < 0 || (size_t)w >= sizeof buf) {
         fprintf(stderr, "[subscriber] SUB demasiado largo.\n");
         return -1;
     }
-    /* Tras connect(UDP) al broker, send() basta; el origen sigue identificando al cliente. */
-    ssize_t n = send(sock, buf, (size_t)w, 0);
+    ssize_t n = sendto(sock, buf, (size_t)w, 0, (const struct sockaddr *)broker,
+                       (socklen_t)sizeof(*broker));
     if (n < 0) {
-        perror("[subscriber] send SUB");
+        perror("[subscriber] sendto SUB");
         return -1;
     }
     printf("[subscriber] Registrado SUB '%s' (%zd bytes enviados al broker)\n", topic, n);
@@ -132,12 +144,6 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    if (connect(sock, (const struct sockaddr *)&broker, sizeof broker) < 0) {
-        perror("[subscriber] connect UDP al broker");
-        close(sock);
-        return EXIT_FAILURE;
-    }
-
     for (int i = 3; i < argc; i++) {
         const char *topic = argv[i];
         if (strchr(topic, ' ') != NULL) {
@@ -150,7 +156,7 @@ int main(int argc, char **argv) {
             close(sock);
             return EXIT_FAILURE;
         }
-        if (send_sub(sock, topic) != 0) {
+        if (send_sub(sock, &broker, topic) != 0) {
             close(sock);
             return EXIT_FAILURE;
         }
@@ -171,6 +177,10 @@ int main(int argc, char **argv) {
             continue;
         }
         buf[n] = '\0';
+
+        if (!udp_peer_match(&from, &broker)) {
+            continue;
+        }
 
         char fromstr[INET_ADDRSTRLEN];
         /* inet_ntop: copia la IPv4 a fromstr (seguro concurrente vs inet_ntoa). */

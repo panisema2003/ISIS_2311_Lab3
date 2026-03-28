@@ -17,12 +17,12 @@ Genera `broker_udp`, `publisher_udp` y `subscriber_udp`. `make clean` elimina lo
 ## Uso rápido
 
 - Broker: `./broker_udp [puerto]` (por defecto puerto 9000 en `pubsub_udp.h`).
-- Publicador: `./publisher_udp <ip_broker> <puerto> <tema> [-n N] [-f] [-r]` — `-n` hasta 100000; **`-f`** = sin `usleep` entre envíos (ráfaga); **`-r`** ≈ mitad de pausas en 0 ms (más irregular).
+- Publicador: `./publisher_udp <ip_broker> <puerto> <tema> [-n N] [-f] [-r] [-q]` — `-n` hasta 100000; **`-f`** = sin `usleep` entre envíos (ráfaga); **`-r`** ≈ mitad de pausas en 0 ms (más irregular); **`-q`** = no imprime cada envío (evita saturar SSH/TCP al medir o capturar tráfico).
 - Suscriptor: `./subscriber_udp <ip_broker> <puerto> <tema1> [tema2 ...]`
 
 **Tema con dos equipos:** use el patrón `Local_vs_Visitante` (por ejemplo `EquipoC_vs_EquipoD`). El publicador arma los textos de la demo con esos nombres. Si no hay `_vs_`, el tema completo se trata como equipo local y se usa `Rival` como visita en la narración.
 
-Publicador y suscriptor hacen **`connect(UDP)`** al broker y luego **`send()`** / **`recvfrom()`** hacia ese extremo.
+El **publicador** usa **`connect(UDP)`** al broker y **`send()`** para cada `PUB`. El **suscriptor** usa **`sendto()`** para cada `SUB` y **`recvfrom()`** sin `connect`, filtrando en aplicación los datagramas cuyo origen es la IP y puerto del broker (evita comportamientos rígidos de UDP conectado en Linux con `ACK`/`NEWS`).
 
 **Firewall (UFW):** en la VM del broker debe existir `allow 9000/udp` o el tráfico no llegará al proceso aunque `tcpdump` lo vea en la interfaz.
 
@@ -115,15 +115,15 @@ El formato de mensajes de aplicación está descrito en el comentario inicial de
 | `<stdlib.h>` | `strtoul`, `EXIT_*` | Puerto desde `argv`. |
 | `<string.h>` | `strchr`, `strlen`, `strncmp`, `memcpy`, `strcspn`, `memset` | Validación de tema; prefijos; parseo de `NEWS`; limpieza de `sockaddr_in`. |
 | `<stdint.h>` | `uint16_t` | Cast para `htons`. |
-| `<sys/socket.h>` | `socket`, `connect`, `send`, `recvfrom`, `AF_INET`, `SOCK_DGRAM`, `ssize_t`, `socklen_t` | `connect` al broker; `send` de cada `SUB`; recepción de `ACK`/`NEWS`. |
+| `<sys/socket.h>` | `socket`, `sendto`, `recvfrom`, `AF_INET`, `SOCK_DGRAM`, `ssize_t`, `socklen_t` | Sin `connect`: `sendto` de cada `SUB`; `recvfrom` y filtro por origen del broker. |
 | `<netinet/in.h>` | `struct sockaddr_in`, `htons`, `ntohs`, `INET_ADDRSTRLEN` | Broker y presentación del puerto de origen. |
 | `<arpa/inet.h>` | `inet_pton`, `inet_ntop` | Broker en binario; IP de origen en cadena. |
 | `<unistd.h>` | `close` | Cierre en errores o ruta final teórica de `main`. |
 
 **Sockets (detalle):**
 
-- **`connect`** — Asocia el socket UDP al broker; **`send`** envía cada `SUB`.
-- **`recvfrom`** — Recibe `ACK`, `NEWS`; con socket conectado, en la práctica el remitente es el broker.
+- **`sendto`** — Envía cada `SUB` al broker (`sockaddr_in` del broker).
+- **`recvfrom`** — Recibe datagramas; solo se procesan si el origen coincide con IP:puerto del broker (el resto se ignora).
 - **`inet_ntop`** — Muestra la IPv4 del remitente en el log.
 - **`ntohs`** — Puerto de origen legible.
 

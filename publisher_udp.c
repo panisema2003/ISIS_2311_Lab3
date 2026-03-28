@@ -8,10 +8,11 @@
  * 10 envíos para el laboratorio; tras eso puede escribir líneas por stdin.
  *
  * Uso:
- *   ./publisher_udp <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r]
+ *   ./publisher_udp <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r] [-q]
  *     -n N   eventos demo (por defecto 12; máx. 100000).
  *     -f     sin pausas entre envíos (ráfaga).
  *     -r     ~50% de pausas en 0 ms (mezcla ráfagas y tiempos de la línea).
+ *     -q     no imprime cada envío (útil con -n grande por SSH: evita inundar TCP/22).
  *
  * Ejemplo:
  *   ./publisher_udp 127.0.0.1 9000 EquipoA_vs_EquipoB
@@ -121,7 +122,7 @@ static int build_pub_datagram(char *out, size_t out_sz, const char *topic,
     return 0;
 }
 
-static int send_pub(int sock, const char *topic, const char *body) {
+static int send_pub(int sock, int quiet, const char *topic, const char *body) {
     char buf[PUBSUB_UDP_MAX_MSG + 1];
     if (build_pub_datagram(buf, sizeof buf, topic, body) != 0) {
         return -1;
@@ -133,18 +134,21 @@ static int send_pub(int sock, const char *topic, const char *body) {
         perror("[publisher] send");
         return -1;
     }
-    printf("[publisher] Enviado (%zu bytes): %s", len, buf);
-    fflush(stdout);
+    if (!quiet) {
+        printf("[publisher] Enviado (%zu bytes): %s", len, buf);
+        fflush(stdout);
+    }
     return 0;
 }
 
 static void usage(const char *argv0) {
     fprintf(stderr,
-            "Uso: %s <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r]\n"
+            "Uso: %s <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r] [-q]\n"
             "  <tema>   partido sin espacios (ej. EquipoA_vs_EquipoB)\n"
             "  -n N     eventos demo (defecto 12, máx 100000)\n"
             "  -f       sin pausas entre envíos (ráfaga)\n"
-            "  -r       ~50%% de pausas en 0 ms, resto según línea de tiempo\n",
+            "  -r       ~50%% de pausas en 0 ms, resto según línea de tiempo\n"
+            "  -q       sin imprimir cada envío (recomendado con -n alto vía SSH)\n",
             argv0);
 }
 
@@ -170,6 +174,7 @@ int main(int argc, char **argv) {
     int auto_count = 12;
     int fast_burst = 0;
     int random_skip_sleep = 0;
+    int quiet = 0;
     int base_args = 4;
 
     if (argc < base_args) {
@@ -191,6 +196,8 @@ int main(int argc, char **argv) {
             fast_burst = 1;
         } else if (strcmp(argv[i], "-r") == 0) {
             random_skip_sleep = 1;
+        } else if (strcmp(argv[i], "-q") == 0) {
+            quiet = 1;
         } else {
             fprintf(stderr, "Argumento desconocido: %s\n", argv[i]);
             usage(argv[0]);
@@ -283,12 +290,16 @@ int main(int argc, char **argv) {
             close(sock);
             return EXIT_FAILURE;
         }
-        if (send_pub(sock, topic, msgbuf) != 0) {
+        if (send_pub(sock, quiet, topic, msgbuf) != 0) {
             close(sock);
             return EXIT_FAILURE;
         }
     }
 
+    if (quiet) {
+        printf("[publisher] %d mensaje(s) demo UDP enviado(s) (-q: sin eco por mensaje).\n",
+               auto_count);
+    }
     printf("[publisher] Mensajes demo enviados. Escriba líneas adicionales (Enter para "
            "enviar, EOF/Ctrl+D para terminar):\n");
     char line[1024];
@@ -297,7 +308,7 @@ int main(int argc, char **argv) {
         if (line[0] == '\0') {
             continue;
         }
-        if (send_pub(sock, topic, line) != 0) {
+        if (send_pub(sock, quiet, topic, line) != 0) {
             break;
         }
     }
