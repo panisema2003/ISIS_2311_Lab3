@@ -8,8 +8,10 @@
  * 10 envíos para el laboratorio; tras eso puede escribir líneas por stdin.
  *
  * Uso:
- *   ./publisher_udp <ip_broker> <puerto_broker> <tema> [-n N]
- *     -n N   cuántos eventos de la simulación enviar (por defecto 12).
+ *   ./publisher_udp <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r]
+ *     -n N   eventos demo (por defecto 12; máx. 100000).
+ *     -f     sin pausas entre envíos (ráfaga).
+ *     -r     ~50% de pausas en 0 ms (mezcla ráfagas y tiempos de la línea).
  *
  * Ejemplo:
  *   ./publisher_udp 127.0.0.1 9000 EquipoA_vs_EquipoB
@@ -27,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -137,9 +140,11 @@ static int send_pub(int sock, const char *topic, const char *body) {
 
 static void usage(const char *argv0) {
     fprintf(stderr,
-            "Uso: %s <ip_broker> <puerto_broker> <tema> [-n N]\n"
-            "  <tema>   identificador del partido, sin espacios (ej. EquipoA_vs_EquipoB)\n"
-            "  -n N     eventos de la línea de tiempo a enviar (por defecto 12)\n",
+            "Uso: %s <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r]\n"
+            "  <tema>   partido sin espacios (ej. EquipoA_vs_EquipoB)\n"
+            "  -n N     eventos demo (defecto 12, máx 100000)\n"
+            "  -f       sin pausas entre envíos (ráfaga)\n"
+            "  -r       ~50%% de pausas en 0 ms, resto según línea de tiempo\n",
             argv0);
 }
 
@@ -163,6 +168,8 @@ int main(int argc, char **argv) {
     (void)setvbuf(stderr, NULL, _IONBF, 0);
 
     int auto_count = 12;
+    int fast_burst = 0;
+    int random_skip_sleep = 0;
     int base_args = 4;
 
     if (argc < base_args) {
@@ -174,12 +181,16 @@ int main(int argc, char **argv) {
         if (strcmp(argv[i], "-n") == 0 && i + 1 < argc) {
             char *end = NULL;
             unsigned long v = strtoul(argv[i + 1], &end, 10);
-            if (end == argv[i + 1] || *end != '\0' || v == 0UL || v > 10000UL) {
+            if (end == argv[i + 1] || *end != '\0' || v == 0UL || v > 100000UL) {
                 fprintf(stderr, "Valor inválido para -n\n");
                 return EXIT_FAILURE;
             }
             auto_count = (int)v;
             i++;
+        } else if (strcmp(argv[i], "-f") == 0) {
+            fast_burst = 1;
+        } else if (strcmp(argv[i], "-r") == 0) {
+            random_skip_sleep = 1;
         } else {
             fprintf(stderr, "Argumento desconocido: %s\n", argv[i]);
             usage(argv[0]);
@@ -187,13 +198,11 @@ int main(int argc, char **argv) {
         }
     }
 
-    const char *broker_ip = argv[1];
-    if (strcmp(broker_ip, "127.0.0.1") == 0 || strcmp(broker_ip, "localhost") == 0) {
-        fprintf(stderr,
-                "[publisher] AVISO: 127.0.0.1/localhost es ESTA máquina. Si el broker está en "
-                "OTRA VM, use su IPv4 (p. ej. salida de `hostname -I` en la VM del broker). "
-                "Si no, los datagramas no llegarán al broker.\n");
+    if (random_skip_sleep) {
+        srand((unsigned)(time(NULL) ^ (unsigned)getpid()));
     }
+
+    const char *broker_ip = argv[1];
     char *port_end = NULL;
     unsigned long port_ul = strtoul(argv[2], &port_end, 10);
     if (port_end == argv[2] || *port_end != '\0' || port_ul == 0UL ||
@@ -238,9 +247,15 @@ int main(int argc, char **argv) {
     char home[64], away[64];
     topic_to_teams(topic, home, sizeof home, away, sizeof away);
 
-    printf("[publisher] Broker %s:%lu, tema '%s'. Simulación: %d evento(s) "
-           "(intervalos variables, estilo transmisión en vivo).\n",
-           broker_ip, port_ul, topic, auto_count);
+    printf("[publisher] Broker %s:%lu, tema '%s', %d evento(s)", broker_ip, port_ul, topic,
+           auto_count);
+    if (fast_burst) {
+        printf(" [modo -f: sin pausas]\n");
+    } else if (random_skip_sleep) {
+        printf(" [modo -r: ~50%% pausas en 0 ms]\n");
+    } else {
+        printf(" (intervalos de la línea de tiempo).\n");
+    }
 
     for (int i = 0; i < auto_count; i++) {
         size_t idx = (size_t)i % match_timeline_len;
@@ -252,7 +267,14 @@ int main(int argc, char **argv) {
         } else {
             wait_ms = match_timeline[idx].delay_before_send_ms;
         }
-        usleep((useconds_t)(wait_ms * 1000u));
+        if (fast_burst) {
+            wait_ms = 0;
+        } else if (random_skip_sleep && (rand() & 1) != 0) {
+            wait_ms = 0;
+        }
+        if (wait_ms > 0) {
+            usleep((useconds_t)(wait_ms * 1000u));
+        }
 
         char msgbuf[512];
         int mw = build_timeline_message(msgbuf, sizeof msgbuf, idx, home, away);
@@ -262,7 +284,7 @@ int main(int argc, char **argv) {
             return EXIT_FAILURE;
         }
         if (send_pub(sock, topic, msgbuf) != 0) {
-            close(sock); /* sendto falló; liberar descriptor */
+            close(sock);
             return EXIT_FAILURE;
         }
     }

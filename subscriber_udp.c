@@ -107,11 +107,6 @@ int main(int argc, char **argv) {
     }
 
     const char *broker_ip = argv[1];
-    if (strcmp(broker_ip, "127.0.0.1") == 0 || strcmp(broker_ip, "localhost") == 0) {
-        fprintf(stderr,
-                "[subscriber] AVISO: 127.0.0.1 es ESTA máquina. Si el broker corre en otra "
-                "VM, indique la IPv4 de esa VM (`hostname -I` allí).\n");
-    }
     char *port_end = NULL;
     unsigned long port_ul = strtoul(argv[2], &port_end, 10);
     if (port_end == argv[2] || *port_end != '\0' || port_ul == 0UL ||
@@ -161,7 +156,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    printf("[subscriber] Suscripciones enviadas. Esperando noticias (Ctrl+C)…\n");
+    printf("[subscriber] Suscripciones enviadas. Esperando noticias (Ctrl+C)...\n");
     fflush(stdout);
 
     for (;;) {

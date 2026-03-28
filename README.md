@@ -16,15 +16,15 @@ Genera `broker_udp`, `publisher_udp` y `subscriber_udp`. `make clean` elimina lo
 
 ## Uso rápido
 
-- Broker: `./broker_udp [-v] [puerto]` (`-v` = un log en stderr por datagrama; por defecto puerto 9000 en `pubsub_udp.h`).
-- Publicador: `./publisher_udp <ip_broker> <puerto> <tema> [-n N]`
+- Broker: `./broker_udp [puerto]` (por defecto puerto 9000 en `pubsub_udp.h`).
+- Publicador: `./publisher_udp <ip_broker> <puerto> <tema> [-n N] [-f] [-r]` — `-n` hasta 100000; **`-f`** = sin `usleep` entre envíos (ráfaga); **`-r`** ≈ mitad de pausas en 0 ms (más irregular).
 - Suscriptor: `./subscriber_udp <ip_broker> <puerto> <tema1> [tema2 ...]`
 
 **Tema con dos equipos:** use el patrón `Local_vs_Visitante` (por ejemplo `EquipoC_vs_EquipoD`). El publicador arma los textos de la demo con esos nombres. Si no hay `_vs_`, el tema completo se trata como equipo local y se usa `Rival` como visita en la narración.
 
-Publicador y suscriptor hacen **`connect(UDP)`** al broker y luego **`send()`** / **`recvfrom()`**: así solo intercambian datagramas con ese extremo y el comportamiento es más predecible en red.
+Publicador y suscriptor hacen **`connect(UDP)`** al broker y luego **`send()`** / **`recvfrom()`** hacia ese extremo.
 
-**Depuración:** `./broker_udp -v 9000` (o `UDP_BROKER_TRACE=1`) imprime en stderr cada datagrama que **recibe el proceso del broker** (tamaño, IP:puerto, inicio del payload). Al arrancar, el broker muestra su **PID**: debe coincidir con `ss -ulnp | grep 9000`. Si tcpdump ve paquetes pero `-v` no muestra nada, **otro proceso** está recibiendo el puerto 9000 o el broker no es el que cree.
+**Firewall (UFW):** en la VM del broker debe existir `allow 9000/udp` o el tráfico no llegará al proceso aunque `tcpdump` lo vea en la interfaz.
 
 ---
 
@@ -63,11 +63,11 @@ El formato de mensajes de aplicación está descrito en el comentario inicial de
 |----------|----------------------|----------------------|
 | `pubsub_udp.h` | Macros anteriores | Protocolo y límites de buffers/tablas. |
 | `<stdio.h>` | `printf`, `fprintf`, `snprintf`, `perror` | Salida informativa, errores, armado de `ACK`/`NEWS` en buffer acotado; `perror` tras fallos de socket. |
-| `<stdlib.h>` | `strtoul`, `getenv`, `EXIT_SUCCESS`, `EXIT_FAILURE` | Puerto desde `argv`; traza opcional `UDP_BROKER_TRACE`; salida de `main`. |
+| `<stdlib.h>` | `strtoul`, `EXIT_SUCCESS`, `EXIT_FAILURE` | Puerto desde `argv`; códigos de salida de `main`. |
 | `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strchr`, `memset` | Prefijos `SUB`/`PUB`, búsqueda de tema, limpieza de estructuras. |
 | `<sys/socket.h>` | `socket`, `bind`, `sendto`, `recvfrom`, `setsockopt`, `AF_INET`, `SOCK_DGRAM`, `SOL_SOCKET`, `SO_REUSEADDR`, `ssize_t`, `socklen_t` | Ciclo de vida del socket UDP del broker. |
 | `<netinet/in.h>` | `struct sockaddr_in`, `htons`, `htonl`, `INADDR_ANY` | Dirección de escucha; orden de red. |
-| `<arpa/inet.h>` | `inet_ntoa`, `inet_ntop` | IP del cliente en logs (`inet_ntop` en modo traza). |
+| `<arpa/inet.h>` | `inet_ntoa` | IP del cliente en logs de suscripción. |
 | `<unistd.h>` | `close` | Cerrar el descriptor del socket en errores o salida teórica. |
 
 **Sockets (detalle):**
@@ -89,7 +89,8 @@ El formato de mensajes de aplicación está descrito en el comentario inicial de
 |----------|----------------------|----------------------|
 | `pubsub_udp.h` | Macros | Prefijo `PUB` y límites de mensaje/tema. |
 | `<stdio.h>` | `snprintf`, `fprintf`, `printf`, `perror`, `fgets` | Armar datagramas, errores, demo e interactivo por stdin. |
-| `<stdlib.h>` | `strtoul`, `EXIT_*` | Puerto, opción `-n`, salida de `main`. |
+| `<stdlib.h>` | `strtoul`, `rand`, `srand`, `EXIT_*` | Puerto; flags `-n`/`-f`/`-r`; semilla aleatoria para `-r`; salida de `main`. |
+| `<time.h>` | `time` | Semilla de `srand` junto con PID para modo `-r`. |
 | `<string.h>` | `strlen`, `strcmp`, `strchr`, `memcpy`, `memset` | Validación de tema; parseo `_vs_`; limpiar `sockaddr_in`. |
 | `<stdint.h>` | `uint16_t` | Cast del puerto para `htons`. |
 | `<sys/socket.h>` | `socket`, `connect`, `send`, `AF_INET`, `SOCK_DGRAM`, `ssize_t`, `socklen_t` | UDP “conectado” al broker y envío con `send`. |
