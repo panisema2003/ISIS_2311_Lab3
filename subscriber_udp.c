@@ -14,11 +14,12 @@
  *
  * Documentación punto a punto de cabeceras estándar/POSIX y sockets: README.md
  *
- * Nota: no se usa connect(UDP) al broker. En Linux, un socket UDP conectado solo
- * entrega datagramas cuyo origen coincide exactamente con el par; si el broker
- * responde con otra IP de origen (multi-interfaz / elección de ruta), ACK y NEWS
- * se descartan en el kernel y recvfrom puede bloquearse sin error visible.
- * Se usa sendto hacia el broker y recvfrom filtrando por IP:puerto del broker.
+ * Nota: no se usa connect(UDP) al broker (evita rechazos en el kernel por ICMP/origen).
+ * Tras recvfrom se aceptan solo datagramas cuyo origen usa el **puerto del broker**
+ * (p. ej. 9000): el broker envía ACK/NEWS desde el socket enlazado a ese puerto.
+ * No se exige que sin_addr coincida con la IP pasada en argv: en VMs con varias
+ * interfaces la IP de origen del datagrama puede no ser la misma que usaste para
+ * enviar el SUB, y filtrar por IP+puerto haría que se ignoraran todas las noticias.
  */
 
 #include "pubsub_udp.h"
@@ -32,10 +33,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-/** Mismo extremo UDP (IPv4 + puerto), para aceptar solo datagramas del broker. */
-static int udp_peer_match(const struct sockaddr_in *a, const struct sockaddr_in *b) {
-    return a->sin_family == AF_INET && b->sin_family == AF_INET &&
-           a->sin_addr.s_addr == b->sin_addr.s_addr && a->sin_port == b->sin_port;
+/** Origen es el servicio del broker (mismo puerto UDP enlazado en el broker). */
+static int udp_from_broker(const struct sockaddr_in *from, const struct sockaddr_in *broker) {
+    return from->sin_family == AF_INET && broker->sin_family == AF_INET &&
+           from->sin_port == broker->sin_port;
 }
 
 static int send_sub(int sock, const struct sockaddr_in *broker, const char *topic) {
@@ -178,7 +179,7 @@ int main(int argc, char **argv) {
         }
         buf[n] = '\0';
 
-        if (!udp_peer_match(&from, &broker)) {
+        if (!udp_from_broker(&from, &broker)) {
             continue;
         }
 
