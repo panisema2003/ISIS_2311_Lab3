@@ -14,6 +14,10 @@ El `Makefile` define `-D_DEFAULT_SOURCE` para **glibc** en Linux: con `-std=c11`
 
 Genera `broker_udp`, `publisher_udp` y `subscriber_udp`. `make clean` elimina los binarios.
 
+### Versión en ensamblador (mismo protocolo UDP)
+
+En **`udp_asm/`** hay `*.s` (x86-64 Linux, AT&T) generados desde esos mismos `.c` con `gcc -S`, más `Makefile` y `gen_asm.sh` para regenerarlos. Compilación: `cd udp_asm && make` → `broker_udp_asm`, `publisher_udp_asm`, `subscriber_udp_asm`. Detalle en **`udp_asm/README.md`**.
+
 ## Uso rápido
 
 - Broker: `./broker_udp [puerto]` (por defecto puerto 9000 en `pubsub_udp.h`).
