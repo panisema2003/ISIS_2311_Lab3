@@ -1,31 +1,6 @@
 /*
  * publisher_tcp.c
- *
  * Uso: ./publisher_tcp "Colombia vs Brasil"
- *
- * DOCUMENTACIÓN DE FUNCIONES DE LIBRERÍA UTILIZADAS
- *
- * LIBRERÍAS INCLUIDAS (todas POSIX estándar):
- *   <stdio.h>      → printf(), snprintf()
- *   <stdlib.h>     → exit()
- *   <string.h>     → strlen(), memset()
- *   <unistd.h>     → close(), sleep()
- *   <sys/socket.h> → socket(), connect(), send()
- *   <netinet/in.h> → struct sockaddr_in, htons()
- *   <arpa/inet.h>  → inet_addr()
- *
- * FUNCIONES DE LIBRERÍA UTILIZADAS (todas POSIX estándar)
- *
- *  socket()     → crea el socket TCP. AF_INET=IPv4, SOCK_STREAM=TCP.
- *  memset()     → inicializa sockaddr_in en ceros antes de asignar sus campos.
- *  htons()      → convierte el puerto a formato de red (big-endian).
- *  inet_addr()  → convierte "127.0.0.1" al entero de 32 bits que usa sockaddr_in.
- *  connect()    → inicia la conexión TCP con el broker (handshake SYN/SYN-ACK/ACK).
- *  snprintf()   → construye el mensaje "[partido] evento" de forma segura.
- *  strlen()     → calcula cuántos bytes enviar con send().
- *  send()       → envía datos por TCP. flags=0 comportamiento estándar.
- *  sleep()      → pausa entre mensajes para simular eventos en tiempo real.
- *  close()      → cierra el socket y envía FIN al broker.
  */
 
 #include <stdio.h>
@@ -41,26 +16,26 @@
 #define BUFFER_SIZE 1024
 
 int main(int argc, char *argv[]) {
-    // El nombre del partido viene como argumento, ej: ./publisher_tcp "Colombia vs Brasil"
     char *partido = (argc > 1) ? argv[1] : "Partido General";
 
-    // Crear el socket TCP
+    // socket(): crea el socket TCP. AF_INET=IPv4, SOCK_STREAM=TCP
     int sock = socket(AF_INET, SOCK_STREAM, 0);
 
-    // Configurar la dirección del broker al que nos vamos a conectar
     struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));            // limpiar la estructura
-    addr.sin_family      = AF_INET;            // IPv4
-    addr.sin_port        = htons(BROKER_PORT); // puerto en formato de red
-    addr.sin_addr.s_addr = inet_addr(BROKER_IP); // IP del broker en binario
+    // memset(): inicializa la estructura en ceros para evitar valores basura
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    // htons(): convierte el puerto a formato de red (big-endian)
+    addr.sin_port = htons(BROKER_PORT);
+    // inet_addr(): convierte "127.0.0.1" al entero de 32 bits que usa sockaddr_in
+    addr.sin_addr.s_addr = inet_addr(BROKER_IP);
 
-    // Conectarse al broker — aquí ocurre el handshake TCP (SYN, SYN-ACK, ACK)
+    // connect(): inicia la conexión TCP con el broker (handshake SYN/SYN-ACK/ACK)
     if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("connect"); exit(1);
     }
     printf("[Publisher] Conectado. Transmitiendo: %s\n\n", partido);
 
-    // Los 10 eventos que vamos a enviar simulando un partido en vivo
     const char *eventos[] = {
         "Inicio del partido",
         "Tiro de esquina para el equipo local",
@@ -75,20 +50,21 @@ int main(int argc, char *argv[]) {
     };
 
     char mensaje[BUFFER_SIZE];
-    int total = sizeof(eventos) / sizeof(eventos[0]);  // = 10
+    int total = sizeof(eventos) / sizeof(eventos[0]);
 
     for (int i = 0; i < total; i++) {
-        // Construir el mensaje con formato "[partido] evento"
+        // snprintf(): construye "[partido] evento" de forma segura sin desbordar el buffer
         snprintf(mensaje, sizeof(mensaje), "[%s] %s", partido, eventos[i]);
-
-        // Enviar al broker — TCP garantiza que llega completo y en orden
+        // strlen(): calcula cuántos bytes enviar
+        // send(): envía el mensaje por TCP. flags=0 comportamiento estándar
         send(sock, mensaje, strlen(mensaje), 0);
         printf("[Publisher] Enviado: %s\n", mensaje);
-
-        sleep(1);  // esperar 1 segundo para simular eventos en tiempo real
+        // sleep(): pausa 1 segundo para simular eventos en tiempo real
+        sleep(1);
     }
 
     printf("\n[Publisher] Listo.\n");
-    close(sock);  // cierra la conexión, el broker recibe FIN
+    // close(): cierra la conexión, el broker recibe FIN
+    close(sock);
     return 0;
 }
