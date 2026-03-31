@@ -1,5 +1,0 @@
-# Generados con `make` en esta carpeta (regenerables)
-broker_udp_asm
-publisher_udp_asm
-subscriber_udp_asm
-*.o
