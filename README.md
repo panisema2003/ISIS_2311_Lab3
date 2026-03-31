@@ -117,7 +117,7 @@ cd udp_asm
 make
 ```
 
-Genera `broker_udp_asm`, `publisher_udp_asm`, `subscriber_udp_asm`.
+Genera `broker_udp_asm`, `publisher_udp_asm`, `subscriber_udp_asm`. El `Makefile` usa **`-no-pie`** al enlazar: en Ubuntu reciente el enlazador asume ejecutables PIE por defecto y el `.s` generado con `gcc -S` suele llevar relocaciones absolutas (`R_X86_64_32`), que sin `-no-pie` provocan el error *relocation … can not be used when making a PIE object*.
 
 ```bash
 make clean
