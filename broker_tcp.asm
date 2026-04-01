@@ -215,16 +215,17 @@ _start:
     mov [bytes_recv], rax       ; guardar cuántos bytes llegaron
 
     ; Reenviar el mensaje a cada subscriber
-    mov rcx, 0                  ; índice del subscriber actual
+    ; Usamos r12 para el índice porque rcx puede ser modificado por syscalls
+    mov r12, 0                  ; r12 = índice del subscriber actual
 
 .loop_broadcast:
-    cmp rcx, [num_subs]         ; ¿ya enviamos a todos?
+    cmp r12, [num_subs]         ; ¿ya enviamos a todos?
     jge .broadcast_done
 
     ; sendto(sub_socks[i], buffer, bytes_recv, 0, NULL, 0)
     ; Envía el mensaje al subscriber i
     lea rbx, [sub_socks]
-    mov rdi, [rbx + rcx*8]     ; socket del subscriber i
+    mov rdi, [rbx + r12*8]     ; socket del subscriber i
     mov rax, 44                 ; syscall 44 = sendto()
     lea rsi, [buffer]           ; mensaje a enviar
     mov rdx, [bytes_recv]       ; longitud del mensaje
@@ -233,7 +234,7 @@ _start:
     mov r9,  0
     syscall
 
-    inc rcx
+    inc r12
     jmp .loop_broadcast
 
 .broadcast_done:
