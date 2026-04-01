@@ -1,6 +1,6 @@
 # Implementación de Protocolos UDP y TCP en C y Assembly
 
-## Integrantes
+## Integrantes / GRUPO 1
 
 * Juan Diego Quintero Álvarez
 * María Inés Velásquez
@@ -55,7 +55,6 @@ En este caso, la documentación no se encuentra en un README separado.
 Cada archivo del directorio incluye comentarios que explican:
 
 * La funcionalidad que implementa el archivo.
-* El rol que cumple dentro del sistema (cliente o servidor).
 * Las instrucciones necesarias para compilar y ejecutar el programa.
 
 De esta forma, la documentación se encuentra integrada directamente dentro del código fuente.
