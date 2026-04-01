@@ -10,16 +10,9 @@
  * Ejemplo:
  *   ./subscriber_udp 127.0.0.1 9000 EquipoA_vs_EquipoB EquipoC_vs_EquipoD
  *
- * Compilación (Linux): gcc -Wall -Wextra -std=c11 -o subscriber_udp subscriber_udp.c
- *
- * Documentación punto a punto de cabeceras estándar/POSIX y sockets: README.md
- *
  * Nota: no se usa connect(UDP) al broker (evita rechazos en el kernel por ICMP/origen).
  * Tras recvfrom se aceptan solo datagramas cuyo origen usa el **puerto del broker**
- * (p. ej. 9000): el broker envía ACK/NEWS desde el socket enlazado a ese puerto.
- * No se exige que sin_addr coincida con la IP pasada en argv: en VMs con varias
- * interfaces la IP de origen del datagrama puede no ser la misma que usaste para
- * enviar el SUB, y filtrar por IP+puerto haría que se ignoraran todas las noticias.
+ * (p. ej. 9000): el broker envía OK SUB / NEWS desde el socket enlazado a ese puerto.
  */
 
 #include "pubsub_udp.h"
@@ -33,12 +26,16 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-/** Origen es el servicio del broker (mismo puerto UDP enlazado en el broker). */
+/*
+ * Devuelve verdadero si el datagrama parece venir del broker: mismo puerto de origen
+ * que el puerto de servicio (p. ej. 9000). No exige coincidir la IP con argv.
+ */
 static int udp_from_broker(const struct sockaddr_in *from, const struct sockaddr_in *broker) {
     return from->sin_family == AF_INET && broker->sin_family == AF_INET &&
            from->sin_port == broker->sin_port;
 }
 
+/* Arma SUB <tema>\n y lo envía con sendto al broker. */
 static int send_sub(int sock, const struct sockaddr_in *broker, const char *topic) {
     char buf[PUBSUB_UDP_MAX_MSG + 1];
     int w = snprintf(buf, sizeof buf, "%s%s\n", PUBSUB_UDP_PREFIX_SUB, topic);
@@ -57,10 +54,10 @@ static int send_sub(int sock, const struct sockaddr_in *broker, const char *topi
     return 0;
 }
 
-/** Imprime ACK SUB <tema> de forma legible. */
-static void print_ack_line(const char *buf, const char *fromstr, uint16_t port) {
-    const size_t plen = strlen(PUBSUB_UDP_PREFIX_ACK);
-    if (strncmp(buf, PUBSUB_UDP_PREFIX_ACK, plen) != 0) {
+/* Si buf empieza por OK SUB , muestra confirmación de suscripción en consola. */
+static void print_sub_ok_line(const char *buf, const char *fromstr, uint16_t port) {
+    const size_t plen = strlen(PUBSUB_UDP_PREFIX_SUB_OK);
+    if (strncmp(buf, PUBSUB_UDP_PREFIX_SUB_OK, plen) != 0) {
         return;
     }
     const char *rest = buf + plen;
@@ -70,7 +67,7 @@ static void print_ack_line(const char *buf, const char *fromstr, uint16_t port) 
     fflush(stdout);
 }
 
-/** Parsea NEWS <tema>|<cuerpo> y lo muestra separando metadatos del texto. */
+/* Si buf empieza por NEWS , separa tema y cuerpo por '|' y los imprime formateados. */
 static void print_news_line(const char *buf, const char *fromstr, uint16_t port) {
     const size_t plen = strlen(PUBSUB_UDP_PREFIX_NEWS);
     if (strncmp(buf, PUBSUB_UDP_PREFIX_NEWS, plen) != 0) {
@@ -102,6 +99,7 @@ static void print_news_line(const char *buf, const char *fromstr, uint16_t port)
     fflush(stdout);
 }
 
+/* Ayuda de uso por stderr. */
 static void usage(const char *argv0) {
     fprintf(stderr,
             "Uso: %s <ip_broker> <puerto_broker> <tema1> [tema2 ...]\n"
@@ -109,6 +107,10 @@ static void usage(const char *argv0) {
             argv0);
 }
 
+/*
+ * Valida argumentos, crea socket UDP, envía un SUB por cada tema en argv,
+ * y entra en bucle recvfrom filtrando por puerto del broker y mostrando OK SUB / NEWS.
+ */
 int main(int argc, char **argv) {
     (void)setvbuf(stdout, NULL, _IONBF, 0);
     (void)setvbuf(stderr, NULL, _IONBF, 0);
@@ -170,7 +172,7 @@ int main(int argc, char **argv) {
         char buf[PUBSUB_UDP_MAX_MSG + 1];
         struct sockaddr_in from;
         socklen_t flen = sizeof from;
-        /* recvfrom: ACK/NEWS del broker (u otro); "from" documenta el remitente. */
+        /* recvfrom: OK SUB / NEWS del broker (u otro); "from" documenta el remitente. */
         ssize_t n = recvfrom(sock, buf, PUBSUB_UDP_MAX_MSG, 0,
                              (struct sockaddr *)&from, &flen);
         if (n < 0) {
@@ -188,8 +190,8 @@ int main(int argc, char **argv) {
         inet_ntop(AF_INET, &from.sin_addr, fromstr, sizeof fromstr);
 
         uint16_t sport = ntohs(from.sin_port);
-        if (strncmp(buf, PUBSUB_UDP_PREFIX_ACK, strlen(PUBSUB_UDP_PREFIX_ACK)) == 0) {
-            print_ack_line(buf, fromstr, sport);
+        if (strncmp(buf, PUBSUB_UDP_PREFIX_SUB_OK, strlen(PUBSUB_UDP_PREFIX_SUB_OK)) == 0) {
+            print_sub_ok_line(buf, fromstr, sport);
         } else if (strncmp(buf, PUBSUB_UDP_PREFIX_NEWS,
                            strlen(PUBSUB_UDP_PREFIX_NEWS)) == 0) {
             print_news_line(buf, fromstr, sport);

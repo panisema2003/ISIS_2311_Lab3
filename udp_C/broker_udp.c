@@ -13,11 +13,10 @@
  *   - No hay sesión TCP: cada envío es independiente; el broker identifica a
  *     los suscriptores por la dirección de origen del datagrama SUB (IP:puerto).
  *   - No hay cierre de sesión: si el proceso cliente termina, la entrada en el
- *     broker sigue hasta llenar la tabla; un nuevo cliente suele tener otro
- *     puerto efímero y se registra como otro extremo (fiel al modelo UDP).
- *   - Puede haber pérdida o desorden; este programa no retransmite ni ordena.
+ *     broker sigue hasta llenar la tabla.
+ *   - Puede haber pérdida o desorden.
  *
- * Compilación (Linux): gcc -Wall -Wextra -std=c11 -o broker_udp broker_udp.c
+ * Compilación (Linux): make
  *
  * Documentación punto a punto de cabeceras estándar/POSIX y sockets: README.md
  */
@@ -32,15 +31,20 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+/* Estructura para almacenar los suscriptores de un tema. */
 typedef struct {
     char topic[PUBSUB_UDP_MAX_TOPIC_LEN + 1];
     struct sockaddr_in subs[PUBSUB_UDP_MAX_SUBS_PER_TOPIC];
     int n_subs;
 } TopicBucket;
 
+/* Array global para almacenar los temas y sus suscriptores. */
 static TopicBucket g_topics[PUBSUB_UDP_MAX_TOPICS];
+
+/* Contador global para el número de temas registrados. */
 static int g_n_topics;
 
+/* Quita finales \n o \r del buffer recibido por UDP para parsear texto limpio. */
 static void strip_trailing_crlf(char *s) {
     size_t n = strlen(s);
     while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) {
@@ -49,6 +53,7 @@ static void strip_trailing_crlf(char *s) {
     }
 }
 
+/* Compara dos direcciones IPv4+puerto (orden de red) para detectar duplicados exactos. */
 static int sockaddr_in_equal(const struct sockaddr_in *a,
                              const struct sockaddr_in *b) {
     return a->sin_family == b->sin_family &&
@@ -56,6 +61,7 @@ static int sockaddr_in_equal(const struct sockaddr_in *a,
            a->sin_port == b->sin_port;
 }
 
+/* Busca el índice del tema en g_topics; devuelve -1 si no existe. */
 static int find_topic_index(const char *topic) {
     for (int i = 0; i < g_n_topics; i++) {
         if (strcmp(g_topics[i].topic, topic) == 0) {
@@ -80,6 +86,7 @@ static int add_topic_bucket(const char *topic) {
     return g_n_topics - 1;
 }
 
+/* Obtiene el índice del tema o crea un bucket nuevo vacío si aún no estaba registrado. */
 static int ensure_topic_index(const char *topic) {
     int idx = find_topic_index(topic);
     if (idx >= 0) {
@@ -107,6 +114,7 @@ static void add_subscriber_to_topic(int topic_idx, const struct sockaddr_in *add
     b->subs[b->n_subs++] = *addr;
 }
 
+/* Envía un datagrama UDP de texto terminado en C-string hacia la dirección indicada. */
 static int send_datagram(int sock, const char *text, const struct sockaddr_in *to) {
     size_t len = strlen(text);
     if (len > PUBSUB_UDP_MAX_MSG) {
@@ -123,8 +131,10 @@ static int send_datagram(int sock, const char *text, const struct sockaddr_in *t
     return 0;
 }
 
-/**
- * Procesa: SUB <tema>
+/*
+ * Procesa un SUB: valida el tema, asegura bucket, registra la dirección del cliente,
+ * envía OK SUB <tema> y escribe log. Si la tabla de suscriptores del tema está llena,
+ * no añade fila pero igual envía esa respuesta (limitación del lab).
  */
 static void handle_subscribe(int sock, char *payload, const struct sockaddr_in *client) {
     strip_trailing_crlf(payload);
@@ -150,13 +160,13 @@ static void handle_subscribe(int sock, char *payload, const struct sockaddr_in *
     }
     add_subscriber_to_topic(ti, client);
 
-    char ack[PUBSUB_UDP_MAX_MSG];
-    int w = snprintf(ack, sizeof ack, "%s%s\n", PUBSUB_UDP_PREFIX_ACK, payload);
-    if (w < 0 || (size_t)w >= sizeof ack) {
-        fprintf(stderr, "[broker] ACK demasiado largo.\n");
+    char sub_ok[PUBSUB_UDP_MAX_MSG];
+    int w = snprintf(sub_ok, sizeof sub_ok, "%s%s\n", PUBSUB_UDP_PREFIX_SUB_OK, payload);
+    if (w < 0 || (size_t)w >= sizeof sub_ok) {
+        fprintf(stderr, "[broker] Respuesta SUB (OK SUB) demasiado larga.\n");
         return;
     }
-    (void)send_datagram(sock, ack, client);
+    (void)send_datagram(sock, sub_ok, client);
     /* inet_ntoa / ntohs: solo presentación humana de la dirección guardada. */
     printf("[broker] Suscripción registrada: tema='%s' desde %s:%u "
            "(extremos IP:puerto en el tema: %d)\n",
@@ -164,8 +174,9 @@ static void handle_subscribe(int sock, char *payload, const struct sockaddr_in *
            g_topics[ti].n_subs);
 }
 
-/**
- * Procesa: PUB <tema>|<cuerpo>
+/*
+ * Procesa un PUB: separa tema y cuerpo por el primer '|', arma NEWS tema|cuerpo
+ * y hace sendto a cada suscriptor registrado en ese tema.
  */
 static void handle_publish(int sock, char *payload) {
     strip_trailing_crlf(payload);
@@ -206,11 +217,16 @@ static void handle_publish(int sock, char *payload) {
     printf("[broker] PUB tema='%s' reenviado a %d extremo(s) UDP.\n", topic, sent);
 }
 
+/* Imprime sintaxis de línea de comandos en stderr. */
 static void usage(const char *argv0) {
     fprintf(stderr, "Uso: %s [puerto]\n", argv0);
     fprintf(stderr, "  Escucha datagramas UDP y distribuye mensajes por tema.\n");
 }
 
+/*
+ * Punto de entrada: lee puerto opcional, abre socket UDP, bind, y en bucle infinito
+ * recvfrom + despacho según prefijo SUB o PUB del protocolo de aplicación.
+ */
 int main(int argc, char **argv) {
     unsigned short port = PUBSUB_UDP_DEFAULT_PORT;
     if (argc > 2) {

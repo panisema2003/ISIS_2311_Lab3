@@ -1,9 +1,9 @@
 # Binarios a partir de ensamblador generado por GCC (-S) desde los .c de la raíz del repo.
-# Arquitectura: x86-64 Linux, sintaxis AT&T (ensamblador de GNU as).
+# Arquitectura: x86-64 Linux.
 
 CC       = gcc
 CFLAGS   = -O1 -std=c11 -D_DEFAULT_SOURCE
-# El .s de gcc -S usa relocaciones absolutas; el enlazador por defecto (-pie) falla en Ubuntu reciente.
+# -no-pie para que no falle el make en ubuntu server.
 LDFLAGS  = -no-pie
 
 BINARIES = broker_udp_asm publisher_udp_asm subscriber_udp_asm

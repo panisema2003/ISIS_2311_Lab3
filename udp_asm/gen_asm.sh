@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenera los .s a partir de los .c en udp_C/ (fuente canónica del laboratorio en C).
+# Regenera los .s a partir de los .c en udp_C/.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"

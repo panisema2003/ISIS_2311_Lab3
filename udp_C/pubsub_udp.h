@@ -1,8 +1,6 @@
 /**
  * pubsub_udp.h — Definiciones compartidas del sistema de noticias deportivas (UDP).
  *
- * Laboratorio 3 — Infraestructura de Comunicaciones (Uniandes).
- * Protocolo de aplicación sobre datagramas UDP (sin conexión transporte).
  *
  * Formato de mensajes (texto, terminación recomendada con \\n):
  *
@@ -13,7 +11,8 @@
  *      <cuerpo> es el texto del aviso (puede contener espacios). El primer '|'
  *      separa tema y cuerpo.
  *
- *   Broker -> Suscriptor (tras SUB):  ACK SUB <tema>\\n
+ *   Broker -> Suscriptor (tras SUB):  OK SUB <tema>\\n
+ *      (texto de aplicación; no confundir con flags TCP ACK)
  *
  *   Broker -> Suscriptor (tras PUB):   NEWS <tema>|<cuerpo>\\n
  *
@@ -43,7 +42,7 @@
 
 #define PUBSUB_UDP_PREFIX_SUB  "SUB "
 #define PUBSUB_UDP_PREFIX_PUB  "PUB "
-#define PUBSUB_UDP_PREFIX_ACK  "ACK SUB "
+#define PUBSUB_UDP_PREFIX_SUB_OK "OK SUB "
 #define PUBSUB_UDP_PREFIX_NEWS "NEWS "
 
 #endif /* PUBSUB_UDP_H */

@@ -17,17 +17,17 @@ Implementación del **modelo publicación–suscripción** sobre **datagramas UD
 
 ## Qué hace cada componente
 
-- **Broker (`broker_udp` / `broker_udp_asm`):** escucha UDP en un puerto (por defecto 9000). Recibe `SUB <tema>` de suscriptores y registra su dirección (IP:puerto) por tema. Recibe `PUB <tema>|<cuerpo>` de publicadores y reenvía `NEWS <tema>|<cuerpo>` a todos los extremos suscritos a ese tema. Responde `ACK SUB <tema>` tras cada suscripción. **No altera** el cuerpo del mensaje del publicador.
+- **Broker (`broker_udp` / `broker_udp_asm`):** escucha UDP en un puerto (por defecto 9000). Recibe `SUB <tema>` de suscriptores y registra su dirección (IP:puerto) por tema. Recibe `PUB <tema>|<cuerpo>` de publicadores y reenvía `NEWS <tema>|<cuerpo>` a todos los extremos suscritos a ese tema. Responde `OK SUB <tema>` tras cada suscripción (texto de aplicación; no es el ACK de TCP). **No altera** el cuerpo del mensaje del publicador.
 
 - **Publicador (`publisher_udp` / `publisher_udp_asm`):** envía al broker líneas `PUB <tema>|<cuerpo>\n`. Incluye una demo con varios eventos deportivos; admite flags `-n`, `-f`, `-r`, `-q`, `-d` (ver más abajo).
 
-- **Suscriptor (`subscriber_udp` / `subscriber_udp_asm`):** envía `SUB <tema>\n` por cada partido de interés y muestra en consola los `ACK` y `NEWS` que recibe del broker.
+- **Suscriptor (`subscriber_udp` / `subscriber_udp_asm`):** envía `SUB <tema>\n` por cada partido de interés y muestra en consola las confirmaciones `OK SUB` y los `NEWS` que recibe del broker.
 
 **Protocolo de aplicación (texto, terminación `\n`):**
 
-- Suscriptor → broker: `SUB <tema>\n` (tema sin espacios).
-- Publicador → broker: `PUB <tema>|<cuerpo>\n` (el primer `|` separa tema y cuerpo).
-- Broker → suscriptor: `ACK SUB <tema>\n`, `NEWS <tema>|<cuerpo>\n`.
+- Suscriptor -> broker: `SUB <tema>\n` (tema sin espacios).
+- Publicador -> broker: `PUB <tema>|<cuerpo>\n` (el primer `|` separa tema y cuerpo).
+- Broker -> suscriptor: `OK SUB <tema>\n`, `NEWS <tema>|<cuerpo>\n`.
 
 Límites y constantes: `pubsub_udp.h`.
 
@@ -87,7 +87,7 @@ cd udp_C
 
 **Temas con dos equipos:** patrón `Local_vs_Visitante` (p. ej. `EquipoC_vs_EquipoD`). Sin `_vs_`, el tema completo se usa como local y “Rival” como visita en la narración demo.
 
-**Notas de red:** entre VMs usá la **IPv4 real del broker**, no `127.0.0.1` si el broker es otra máquina. En Ubuntu con UFW: `sudo ufw allow 9000/udp`. El publicador usa `connect(UDP)` + `send`; el suscriptor usa `sendto` + `recvfrom` y acepta datagramas cuyo **puerto de origen** es el del broker (p. ej. 9000), para no perder `ACK`/`NEWS` si la IP de origen difiere de la de `argv`.
+**Notas de red:** entre VMs usá la **IPv4 real del broker**, no `127.0.0.1` si el broker es otra máquina. En Ubuntu con UFW: `sudo ufw allow 9000/udp`. El publicador usa `connect(UDP)` + `send`; el suscriptor usa `sendto` + `recvfrom` y acepta datagramas cuyo **puerto de origen** es el del broker (p. ej. 9000), para no perder `OK SUB`/`NEWS` si la IP de origen difiere de la de `argv`.
 
 ### Si el broker “no recibe”
 
@@ -179,14 +179,14 @@ Se documenta la interacción del programa con **cada cabecera estándar** y los 
 | `PUBSUB_UDP_MAX_MSG` | Tope de carga por datagrama. |
 | `PUBSUB_UDP_MAX_TOPIC_LEN` | Longitud máxima del nombre de tema. |
 | `PUBSUB_UDP_MAX_SUBS_PER_TOPIC`, `PUBSUB_UDP_MAX_TOPICS` | Límites de tablas en el broker. |
-| `PUBSUB_UDP_PREFIX_*` | Cadenas de protocolo: `SUB `, `PUB `, `ACK SUB `, `NEWS `. |
+| `PUBSUB_UDP_PREFIX_*` | Cadenas de protocolo: `SUB `, `PUB `, `OK SUB `, `NEWS `. |
 
 ### `broker_udp.c`
 
 | Cabecera | Funciones / símbolos | Rol en este programa |
 |----------|----------------------|----------------------|
 | `pubsub_udp.h` | Macros anteriores | Protocolo y límites. |
-| `<stdio.h>` | `printf`, `fprintf`, `snprintf`, `perror`, `setvbuf`, `_IONBF` | Logs, errores, armado de `ACK`/`NEWS`; salida sin buffer para ver mensajes al instante. |
+| `<stdio.h>` | `printf`, `fprintf`, `snprintf`, `perror`, `setvbuf`, `_IONBF` | Logs, errores, armado de `OK SUB`/`NEWS`; salida sin buffer para ver mensajes al instante. |
 | `<stdlib.h>` | `strtoul`, `EXIT_SUCCESS`, `EXIT_FAILURE` | Puerto desde `argv`; salida de `main`. |
 | `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strchr`, `memset` | Prefijos, búsqueda de tema, inicialización de estructuras. |
 | `<sys/socket.h>` | `socket`, `bind`, `sendto`, `recvfrom`, `setsockopt`, `AF_INET`, `SOCK_DGRAM`, `SOL_SOCKET`, `SO_REUSEADDR`, `ssize_t`, `socklen_t` | Socket UDP del broker. |
@@ -194,7 +194,7 @@ Se documenta la interacción del programa con **cada cabecera estándar** y los 
 | `<arpa/inet.h>` | `inet_ntoa` | IP del cliente en logs. |
 | `<unistd.h>` | `close` | Cerrar el descriptor del socket. |
 
-**Sockets (detalle):** `socket` → `setsockopt(SO_REUSEADDR)` → `bind` → bucle `recvfrom` → según prefijo `SUB`/`PUB`, `sendto` de `ACK` o `NEWS`.
+**Sockets (detalle):** `socket` -> `setsockopt(SO_REUSEADDR)` -> `bind` -> bucle `recvfrom` -> según prefijo `SUB`/`PUB`, `sendto` de `OK SUB` o `NEWS`.
 
 ### `publisher_udp.c`
 
@@ -209,7 +209,7 @@ Se documenta la interacción del programa con **cada cabecera estándar** y los 
 | `<stdint.h>` | `uint16_t` | Puerto en `htons`. |
 | `<sys/socket.h>` | `socket`, `connect`, `send`, `AF_INET`, `SOCK_DGRAM`, `ssize_t`, `socklen_t` | UDP conectado al broker; envío con `send`. |
 | `<netinet/in.h>` | `struct sockaddr_in`, `htons` | Dirección del broker. |
-| `<arpa/inet.h>` | `inet_pton` | `argv` IP → binario. |
+| `<arpa/inet.h>` | `inet_pton` | `argv` IP -> binario. |
 | `<unistd.h>` | `close`, `usleep`, `useconds_t`, `getpid` | Cerrar socket; pausas entre eventos; semilla de `srand` junto con `time`. |
 
 **Marca de tiempo:** `gettimeofday` + `localtime_r` + `strftime` + `snprintf` para ms; con `-d`, prefijo fijo `[#i/n]` en lugar de reloj en la demo.
@@ -218,7 +218,7 @@ Se documenta la interacción del programa con **cada cabecera estándar** y los 
 
 | Cabecera | Funciones / símbolos | Rol en este programa |
 |----------|----------------------|----------------------|
-| `pubsub_udp.h` | Macros | `SUB`, `ACK`, `NEWS`, límites. |
+| `pubsub_udp.h` | Macros | `SUB`, `OK SUB` (`PUBSUB_UDP_PREFIX_SUB_OK`), `NEWS`, límites. |
 | `<stdio.h>` | `snprintf`, `fprintf`, `printf`, `perror` | `SUB` en buffer, errores, impresión de noticias. |
 | `<stdlib.h>` | `strtoul`, `EXIT_*` | Puerto desde `argv`. |
 | `<string.h>` | `strchr`, `strlen`, `strncmp`, `memcpy`, `strcspn`, `memset` | Validación, prefijos, parseo de `NEWS`. |

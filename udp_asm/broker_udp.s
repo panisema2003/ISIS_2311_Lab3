@@ -156,13 +156,13 @@ send_datagram:
 	.string	"[broker] Aviso: tema '%s' alcanz\303\263 el m\303\241ximo de extremos UDP.\n"
 	.section	.rodata.str1.1
 .LC17:
-	.string	"ACK SUB "
+	.string	"OK SUB "
 .LC18:
 	.string	"%s%s\n"
 	.section	.rodata.str1.8
 	.align 8
 .LC19:
-	.string	"[broker] ACK demasiado largo.\n"
+	.string	"[broker] Respuesta SUB (OK SUB) demasiado larga.\n"
 	.align 8
 .LC20:
 	.string	"[broker] Suscripci\303\263n registrada: tema='%s' desde %s:%u (extremos IP:puerto en el tema: %d)\n"

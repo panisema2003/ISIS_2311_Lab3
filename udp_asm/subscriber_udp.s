@@ -41,7 +41,7 @@
 .LC12:
 	.string	"recvfrom"
 .LC13:
-	.string	"ACK SUB "
+	.string	"OK SUB "
 .LC14:
 	.string	"\r\n"
 	.section	.rodata.str1.8

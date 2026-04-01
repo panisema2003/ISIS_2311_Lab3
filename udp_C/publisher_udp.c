@@ -4,25 +4,20 @@
  * Envía al broker datagramas con el formato PUB <tema>|<cuerpo>, asociados a un
  * partido concreto (tema). Cada cuerpo lleva marca de hora local del publicador
  * al momento del envío (p. ej. [2026-03-27 14:30:01.234] texto...). Los mensajes
- * demo siguen una línea de tiempo: cada
- * evento tiene una espera distinta antes de enviarse (ritmo irregular, como en
- * un partido real: ratos sin novedad y rachas de jugadas). Por defecto al menos
- * 10 envíos para el laboratorio; tras eso puede escribir líneas por stdin.
+ * demo siguen una línea de tiempo: cada evento tiene una espera distinta antes de enviarse. 
+ * Por defecto al menos 12 envíos para el laboratorio; tras eso puede escribir líneas por stdin.
  *
- * Uso:
+ * Uso (y flags):
  *   ./publisher_udp <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r] [-q] [-d]
  *     -n N   eventos demo (por defecto 12; máx. 100000).
- *     -f     sin pausas entre envíos (ráfaga).
+ *     -f     sin pausas entre envíos (ráfaga), usado para tratar de que hubiera perdida de paquetes con udp.
  *     -r     ~50% de pausas en 0 ms (mezcla ráfagas y tiempos de la línea).
- *     -q     no imprime cada envío (útil con -n grande por SSH: evita inundar TCP/22).
- *     -d     demo determinista: mismo payload por índice (prefijo [#i/n]) y con -r usa srand(1).
+ *     -q     no imprime cada envío (útil con -n grande por SSH: evita inundar TCP/22, y facilidad al leer los paquetes sniffeados).
+ *     -d     modo determinista: mismo payload por índice (prefijo [#i/n]) y con -r usa srand(1), necesario para revisar si efectivamente
+ *             se presento perdida de paquetes con udp.
  *
  * Ejemplo:
- *   ./publisher_udp 127.0.0.1 9000 EquipoA_vs_EquipoB
- *
- * Compilación (Linux): gcc -Wall -Wextra -std=c11 -o publisher_udp publisher_udp.c
- *
- * Documentación punto a punto de cabeceras estándar/POSIX y sockets: README.md
+ *   ./publisher_udp 127.0.0.1 9000 EquipoA_vs_EquipoB -n 10000 -f -q -d
  */
 
 #include "pubsub_udp.h"
@@ -38,6 +33,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+/* Elimina saltos de línea finales de una cadena leída por stdin. */
 static void strip_trailing_crlf(char *s) {
     size_t n = strlen(s);
     while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) {
@@ -47,7 +43,7 @@ static void strip_trailing_crlf(char *s) {
 }
 
 /**
- * Interpreta tema tipo "EquipoC_vs_EquipoD": equipos local y visita (slugs sin espacios).
+ * Interpreta tema tipo "EquipoC_vs_EquipoD": equipos local y visita.
  * Si no hay "_vs_", usa el tema completo como local y "Rival" como visita.
  */
 static void topic_to_teams(const char *topic, char *home, size_t home_sz, char *away,
@@ -116,6 +112,7 @@ static int build_timeline_message(char *out, size_t out_sz, size_t idx, const ch
     }
 }
 
+/* Formatea PUB <tema>|<cuerpo>\n en out; comprueba que quepa en out_sz. */
 static int build_pub_datagram(char *out, size_t out_sz, const char *topic,
                               const char *body) {
     int w = snprintf(out, out_sz, "%s%s|%s\n", PUBSUB_UDP_PREFIX_PUB, topic, body);
@@ -167,8 +164,8 @@ static int body_with_timestamp(char *out, size_t out_sz, const char *body) {
 }
 
 /**
- * Si deterministic && n_demo > 0: prefijo [#i/n] fijo (pruebas repetibles).
- * Si no: marca de hora real. Tras la demo, n_demo==0 → siempre hora real (stdin).
+ * Si -d y -n > 0: prefijo [#i/n] fijo (pruebas repetibles).
+ * Si no: marca de hora real. Tras la demo, n_demo==0 -> siempre hora real (stdin).
  */
 static int apply_body_stamp(char *out, size_t out_sz, const char *body, int deterministic,
                             int seq0, int n_demo) {
@@ -183,6 +180,10 @@ static int apply_body_stamp(char *out, size_t out_sz, const char *body, int dete
     return body_with_timestamp(out, out_sz, body);
 }
 
+/*
+ * Aplica marca al cuerpo (hora o [#i/n]), arma el datagrama PUB y lo envía con send
+ * al broker ya conectado. quiet suprime el printf de confirmación por mensaje.
+ */
 static int send_pub(int sock, int quiet, const char *topic, const char *body, int deterministic,
                     int seq0, int n_demo) {
     char stamped[PUBSUB_UDP_MAX_MSG];
@@ -207,6 +208,7 @@ static int send_pub(int sock, int quiet, const char *topic, const char *body, in
     return 0;
 }
 
+/* Muestra en stderr la sintaxis y los flags opcionales. */
 static void usage(const char *argv0) {
     fprintf(stderr,
             "Uso: %s <ip_broker> <puerto_broker> <tema> [-n N] [-f] [-r] [-q] [-d]\n"
@@ -234,6 +236,10 @@ static const size_t match_timeline_len = sizeof match_timeline / sizeof match_ti
 /** Pausa entre “vueltas” si -n pide más eventos de los definidos en la tabla. */
 static const unsigned k_between_cycle_pause_ms = 2500u;
 
+/*
+ * Parsea argv (ip, puerto, tema, flags), conecta UDP al broker, ejecuta la demo
+ * con pausas según -f/-r y luego permite enviar líneas extra por stdin como cuerpos PUB.
+ */
 int main(int argc, char **argv) {
     (void)setvbuf(stdout, NULL, _IONBF, 0);
     (void)setvbuf(stderr, NULL, _IONBF, 0);
@@ -312,10 +318,10 @@ int main(int argc, char **argv) {
     memset(&broker, 0, sizeof broker);
     broker.sin_family = AF_INET;
     broker.sin_port = htons((uint16_t)port_ul);
-    /* inet_pton: dirección del broker desde línea de comandos → binario IPv4. */
+    /* inet_pton: dirección del broker desde línea de comandos -> binario IPv4. */
     if (inet_pton(AF_INET, broker_ip, &broker.sin_addr) != 1) {
         fprintf(stderr, "Dirección IPv4 inválida: %s\n", broker_ip);
-        close(sock); /* cerrar fd si no hubo dirección válida */
+        close(sock); /* cerrar socket si no hubo dirección válida */
         return EXIT_FAILURE;
     }
 
@@ -392,6 +398,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    close(sock); /* fin normal: cerrar el socket UDP */
+    close(sock); /* cerrar el socket UDP */
     return EXIT_SUCCESS;
 }
