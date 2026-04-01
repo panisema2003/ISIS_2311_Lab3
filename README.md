@@ -51,8 +51,7 @@ Toda la documentación de esta parte del proyecto se encuentra centralizada en e
 
 La carpeta **tcp/** contiene la implementación del protocolo **TCP**.
 
-En este caso, la documentación no se encuentra en un README separado.
-Cada archivo del directorio incluye comentarios que explican:
+En este caso, la documentación se encuentra en un README separado, pero tambien csda archivo del directorio incluye comentarios que explican:
 
 * La funcionalidad que implementa el archivo.
 * Las instrucciones necesarias para compilar y ejecutar el programa.
