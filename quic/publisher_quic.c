@@ -1,0 +1,60 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <time.h>
+
+typedef struct {
+    uint8_t  type;
+    uint32_t conn_id;
+    uint32_t stream_id;
+    uint32_t pkt_num;
+    char     payload[256];
+} mini_quic_packet;
+
+int main() {
+    srand(time(NULL));
+    uint32_t my_conn_id = rand() % 10000; // Generar un Connection ID aleatorio único
+    uint32_t pkt_counter = 1;
+
+    // 1. Socket UDP
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    
+    // 2. Definir a dónde vamos a enviar (IP y Puerto del Broker)
+    struct sockaddr_in broker_addr;
+    memset(&broker_addr, 0, sizeof(broker_addr));
+    broker_addr.sin_family = AF_INET;
+    broker_addr.sin_port = htons(8080);
+    inet_pton(AF_INET, "127.0.0.1", &broker_addr.sin_addr); // Localhost
+
+    printf("[PUBLISHER] Iniciando con Connection ID: %u\n", my_conn_id);
+
+    // 3. Simular Handshake QUIC (Tipo 1)
+    // Usamos stream_id 99 para identificar que somos un Publisher
+    mini_quic_packet handshake = {1, my_conn_id, 99, pkt_counter++, "HOLA_BROKER"};
+    sendto(sock, &handshake, sizeof(mini_quic_packet), 0, 
+           (struct sockaddr*)&broker_addr, sizeof(broker_addr));
+    printf("[PUBLISHER] Handshake enviado.\n");
+    sleep(1); // Esperar un momento a que el broker lo procese
+
+    // 4. Enviar datos simulando Streams (Tipo 2)
+    // Simulamos enviar eventos por el Stream 5 (Canal de un partido específico)
+    char* eventos[] = {"Empieza el partido", "Tarjeta Amarilla Min 12", "GOL Min 32!!"};
+    
+    for(int i=0; i<3; i++) {
+        mini_quic_packet data_pkt = {2, my_conn_id, 5, pkt_counter++, ""};
+        strcpy(data_pkt.payload, eventos[i]);
+        
+        sendto(sock, &data_pkt, sizeof(mini_quic_packet), 0, 
+               (struct sockaddr*)&broker_addr, sizeof(broker_addr));
+        
+        printf("[PUBLISHER] Enviado a Stream 5: %s\n", data_pkt.payload);
+        sleep(3); // Simular el tiempo entre eventos en el partido
+    }
+
+    close(sock);
+    return 0;
+}
