@@ -2,18 +2,65 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <time.h>
+#include <sys/select.h>
+#include <sys/time.h>
 
-typedef struct {
+typedef enum {
+    PKT_HANDSHAKE = 1,
+    PKT_DATA      = 2,
+    PKT_ACK       = 3
+} mini_quic_type;
+
+typedef struct __attribute__((packed)) {
     uint8_t  type;
     uint32_t conn_id;
     uint32_t stream_id;
     uint32_t pkt_num;
     char     payload[256];
 } mini_quic_packet;
+
+static int wait_for_ack(int sock, uint32_t conn_id, uint32_t stream_id, uint32_t pkt_num, int timeout_ms) {
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(sock, &rfds);
+
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+    int sel = select(sock + 1, &rfds, NULL, NULL, &tv);
+    if (sel <= 0) return 0;
+
+    mini_quic_packet incoming;
+    struct sockaddr_in from;
+    socklen_t from_len = sizeof(from);
+    ssize_t r = recvfrom(sock, &incoming, sizeof(incoming), 0, (struct sockaddr*)&from, &from_len);
+    if (r <= 0) return 0;
+
+    return (incoming.type == PKT_ACK &&
+            incoming.conn_id == conn_id &&
+            incoming.stream_id == stream_id &&
+            incoming.pkt_num == pkt_num);
+}
+
+static int send_with_retx(int sock, const struct sockaddr_in *to, socklen_t to_len, const mini_quic_packet *pkt) {
+    const int TIMEOUT_MS = 500;
+    const int MAX_RETRIES = 5;
+
+    for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        (void)sendto(sock, pkt, sizeof(*pkt), 0, (const struct sockaddr*)to, to_len);
+        if (wait_for_ack(sock, pkt->conn_id, pkt->stream_id, pkt->pkt_num, TIMEOUT_MS)) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 int main() {
     srand(time(NULL));
@@ -22,6 +69,7 @@ int main() {
 
     // 1. Socket UDP
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) { perror("Error creando socket"); exit(1); }
     
     // 2. Definir a dónde vamos a enviar (IP y Puerto del Broker)
     struct sockaddr_in broker_addr;
@@ -34,24 +82,40 @@ int main() {
 
     // 3. Simular Handshake QUIC (Tipo 1)
     // Usamos stream_id 99 para identificar que somos un Publisher
-    mini_quic_packet handshake = {1, my_conn_id, 99, pkt_counter++, "HOLA_BROKER"};
-    sendto(sock, &handshake, sizeof(mini_quic_packet), 0, 
-           (struct sockaddr*)&broker_addr, sizeof(broker_addr));
-    printf("[PUBLISHER] Handshake enviado.\n");
-    sleep(1); // Esperar un momento a que el broker lo procese
+    mini_quic_packet handshake;
+    memset(&handshake, 0, sizeof(handshake));
+    handshake.type = PKT_HANDSHAKE;
+    handshake.conn_id = my_conn_id;
+    handshake.stream_id = 99;
+    handshake.pkt_num = pkt_counter++;
+    strncpy(handshake.payload, "HOLA_BROKER", sizeof(handshake.payload) - 1);
+
+    if (!send_with_retx(sock, &broker_addr, sizeof(broker_addr), &handshake)) {
+        printf("[PUBLISHER] Handshake sin ACK tras reintentos. Abortando.\n");
+        close(sock);
+        return 1;
+    }
+    printf("[PUBLISHER] Handshake OK (ACK recibido).\n");
 
     // 4. Enviar datos simulando Streams (Tipo 2)
     // Simulamos enviar eventos por el Stream 5 (Canal de un partido específico)
     char* eventos[] = {"Empieza el partido", "Tarjeta Amarilla Min 12", "GOL Min 32!!"};
     
     for(int i=0; i<3; i++) {
-        mini_quic_packet data_pkt = {2, my_conn_id, 5, pkt_counter++, ""};
-        strcpy(data_pkt.payload, eventos[i]);
-        
-        sendto(sock, &data_pkt, sizeof(mini_quic_packet), 0, 
-               (struct sockaddr*)&broker_addr, sizeof(broker_addr));
-        
-        printf("[PUBLISHER] Enviado a Stream 5: %s\n", data_pkt.payload);
+        mini_quic_packet data_pkt;
+        memset(&data_pkt, 0, sizeof(data_pkt));
+        data_pkt.type = PKT_DATA;
+        data_pkt.conn_id = my_conn_id;
+        data_pkt.stream_id = 5;
+        data_pkt.pkt_num = pkt_counter++;
+        strncpy(data_pkt.payload, eventos[i], sizeof(data_pkt.payload) - 1);
+
+        if (!send_with_retx(sock, &broker_addr, sizeof(broker_addr), &data_pkt)) {
+            printf("[PUBLISHER] DATA sin ACK (pkt=%u). Abortando.\n", data_pkt.pkt_num);
+            close(sock);
+            return 1;
+        }
+        printf("[PUBLISHER] Enviado y ACK recibido (Stream 5): %s\n", data_pkt.payload);
         sleep(3); // Simular el tiempo entre eventos en el partido
     }
 

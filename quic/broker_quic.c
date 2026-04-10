@@ -2,12 +2,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/select.h>
+#include <sys/time.h>
 
 // Definición de nuestra cabecera Mini-QUIC
-typedef struct {
+// Nota: esto NO es QUIC real; es un "mini-quic" académico sobre UDP.
+typedef enum {
+    PKT_HANDSHAKE = 1,
+    PKT_DATA      = 2,
+    PKT_ACK       = 3
+} mini_quic_type;
+
+typedef struct __attribute__((packed)) {
     uint8_t  type;
     uint32_t conn_id;
     uint32_t stream_id;
@@ -19,7 +30,28 @@ typedef struct {
 typedef struct {
     uint32_t conn_id;
     struct sockaddr_in addr;
+    int has_outstanding;
+    mini_quic_packet outstanding;
+    uint64_t last_send_ms;
+    int retries;
 } subscriber_t;
+
+static uint64_t now_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
+}
+
+static void send_ack(int sock, const struct sockaddr_in *to, socklen_t to_len, const mini_quic_packet *for_pkt) {
+    mini_quic_packet ack;
+    memset(&ack, 0, sizeof(ack));
+    ack.type = PKT_ACK;
+    ack.conn_id = for_pkt->conn_id;
+    ack.stream_id = for_pkt->stream_id;
+    ack.pkt_num = for_pkt->pkt_num;
+    memcpy(ack.payload, "ACK", 3);
+    (void)sendto(sock, &ack, sizeof(ack), 0, (const struct sockaddr*)to, to_len);
+}
 
 int main() {
     // 1. Creación del Socket UDP (La base de QUIC)
@@ -45,49 +77,113 @@ int main() {
     subscriber_t subs[10];
     int subs_count = 0;
     mini_quic_packet packet;
+    memset(subs, 0, sizeof(subs));
+
+    const uint64_t RETX_TIMEOUT_MS = 500;
+    const int MAX_RETRIES = 5;
 
     while (1) {
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
+        // Usamos select() para no bloquear indefinidamente:
+        // nos deja procesar timers de retransmisión en el mismo hilo.
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(sock, &rfds);
 
-        // 4. recvfrom: Escucha pasivamente CUALQUIER paquete UDP que llegue
-        ssize_t received = recvfrom(sock, &packet, sizeof(mini_quic_packet), 0, 
-                                    (struct sockaddr*)&client_addr, &client_len);
-        
-        if (received > 0) {
-            // Lógica de la máquina de estados Mini-QUIC
-            if (packet.type == 1) {
-                // TIPO 1: Handshake (Un nuevo cliente se conectó)
-                printf("[BROKER] Handshake recibido. Nuevo Connection ID: %u\n", packet.conn_id);
-                
-                // Si es el stream 0, asumimos que es un Suscriptor queriendo registrarse
-                if (packet.stream_id == 0 && subs_count < 10) {
-                    subs[subs_count].conn_id = packet.conn_id;
-                    subs[subs_count].addr = client_addr;
-                    subs_count++;
-                    printf("[BROKER] Suscriptor registrado (Total: %d)\n", subs_count);
-                }
+        struct timeval timeout;
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 100 * 1000; // 100ms
 
-                // Enviar ACK (Confirmación) al cliente
-                mini_quic_packet ack = {2, packet.conn_id, packet.stream_id, packet.pkt_num, "ACK"};
-                sendto(sock, &ack, sizeof(mini_quic_packet), 0, (struct sockaddr*)&client_addr, client_len);
-            
-            } else if (packet.type == 2) {
-                // TIPO 2: Datos (Un Publisher envió una noticia)
-                printf("[BROKER] Noticia recibida en Stream %u (CID: %u): %s\n", 
-                       packet.stream_id, packet.conn_id, packet.payload);
+        int sel = select(sock + 1, &rfds, NULL, NULL, &timeout);
+        if (sel > 0 && FD_ISSET(sock, &rfds)) {
+            struct sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
 
-                // Reenviar a todos los suscriptores simulando multiplexación
-                for (int i = 0; i < subs_count; i++) {
-                    // Mantenemos el Stream ID para que el suscriptor sepa de qué "canal" es
-                    mini_quic_packet fwd_pkt = {2, subs[i].conn_id, packet.stream_id, packet.pkt_num, ""};
-                    strcpy(fwd_pkt.payload, packet.payload);
-                    
-                    // 5. sendto: Enviar el paquete procesado hacia el suscriptor
-                    sendto(sock, &fwd_pkt, sizeof(mini_quic_packet), 0, 
-                           (struct sockaddr*)&subs[i].addr, sizeof(subs[i].addr));
+            ssize_t received = recvfrom(sock, &packet, sizeof(packet), 0,
+                                        (struct sockaddr*)&client_addr, &client_len);
+
+            if (received > 0) {
+                if (packet.type == PKT_HANDSHAKE) {
+                    printf("[BROKER] Handshake recibido. CID: %u Stream: %u\n", packet.conn_id, packet.stream_id);
+
+                    // Si es el stream 0, asumimos que es un Suscriptor queriendo registrarse
+                    if (packet.stream_id == 0) {
+                        int already = 0;
+                        for (int i = 0; i < subs_count; i++) {
+                            if (subs[i].conn_id == packet.conn_id) { already = 1; break; }
+                        }
+                        if (!already && subs_count < 10) {
+                            subs[subs_count].conn_id = packet.conn_id;
+                            subs[subs_count].addr = client_addr;
+                            subs[subs_count].has_outstanding = 0;
+                            subs[subs_count].retries = 0;
+                            subs[subs_count].last_send_ms = 0;
+                            subs_count++;
+                            printf("[BROKER] Suscriptor registrado (Total: %d)\n", subs_count);
+                        }
+                    }
+
+                    // ACK del handshake (para que el cliente pueda retransmitir si se pierde)
+                    send_ack(sock, &client_addr, client_len, &packet);
+                } else if (packet.type == PKT_DATA) {
+                    // DATA desde publisher o reenvío (pero aquí actuamos como broker)
+                    printf("[BROKER] DATA Stream %u (CID: %u Pkt: %u): %s\n",
+                           packet.stream_id, packet.conn_id, packet.pkt_num, packet.payload);
+
+                    // ACK al emisor (publisher) para confiabilidad publisher->broker
+                    send_ack(sock, &client_addr, client_len, &packet);
+
+                    // Reenviar a todos los suscriptores y marcar como "outstanding"
+                    for (int i = 0; i < subs_count; i++) {
+                        mini_quic_packet fwd_pkt;
+                        memset(&fwd_pkt, 0, sizeof(fwd_pkt));
+                        fwd_pkt.type = PKT_DATA;
+                        fwd_pkt.conn_id = subs[i].conn_id;      // dirigido a ese subscriber
+                        fwd_pkt.stream_id = packet.stream_id;   // preservamos stream
+                        fwd_pkt.pkt_num = packet.pkt_num;       // mismo número
+                        strncpy(fwd_pkt.payload, packet.payload, sizeof(fwd_pkt.payload) - 1);
+
+                        (void)sendto(sock, &fwd_pkt, sizeof(fwd_pkt), 0,
+                                     (struct sockaddr*)&subs[i].addr, sizeof(subs[i].addr));
+
+                        subs[i].has_outstanding = 1;
+                        subs[i].outstanding = fwd_pkt;
+                        subs[i].last_send_ms = now_ms();
+                        subs[i].retries = 0;
+                    }
+                } else if (packet.type == PKT_ACK) {
+                    // ACK desde subscriber o publisher.
+                    // Publisher ACKs los manejamos en su lado; aquí sólo nos interesa subscriber->broker.
+                    for (int i = 0; i < subs_count; i++) {
+                        if (subs[i].conn_id == packet.conn_id && subs[i].has_outstanding) {
+                            if (subs[i].outstanding.pkt_num == packet.pkt_num &&
+                                subs[i].outstanding.stream_id == packet.stream_id) {
+                                subs[i].has_outstanding = 0;
+                                subs[i].retries = 0;
+                                subs[i].last_send_ms = 0;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
+        }
+
+        // Timer de retransmisión broker->subscriber
+        uint64_t now = now_ms();
+        for (int i = 0; i < subs_count; i++) {
+            if (!subs[i].has_outstanding) continue;
+            if (now - subs[i].last_send_ms < RETX_TIMEOUT_MS) continue;
+
+            if (subs[i].retries >= MAX_RETRIES) {
+                // dejamos de insistir en este paquete
+                subs[i].has_outstanding = 0;
+                continue;
+            }
+
+            (void)sendto(sock, &subs[i].outstanding, sizeof(subs[i].outstanding), 0,
+                         (struct sockaddr*)&subs[i].addr, sizeof(subs[i].addr));
+            subs[i].retries++;
+            subs[i].last_send_ms = now;
         }
     }
     close(sock);
